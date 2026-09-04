@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -19,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-        node: [20, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -41,5 +44,12 @@ jobs:
       - run: pnpm test
 
       # Integration tests skip gracefully when no Agent CLI is installed.
-      # Before v1.0.0, add an `opencode` install step to at least one leg
-      # so the real-CLI path is exercised in CI (docs/cross-platform.md §8).
+      # Real-CLI leg: install opencode on ubuntu+node24 to exercise the
+      # live-CLI path at least once (docs/cross-platform.md §8).
+      - name: Install opencode (real-CLI leg)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        run: npm install -g opencode-ai@latest
+
+      - name: Verify opencode real-CLI (after install)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        run: opencode --version && pnpm test --run tests/integration/opencode.test.ts tests/integration/opencode-acp.test.ts
