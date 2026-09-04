@@ -30,6 +30,9 @@ describe("resolveShimTarget", () => {
   });
 
   it("resolves npm-style shims to the node script (no extra env)", () => {
+    // Shim resolution is win32-specific (parses %~dp0 and .cmd); skip on POSIX where
+    // the file system and path.normalize differ — the non-win32 case is already covered above.
+    if (process.platform !== "win32") return;
     const dir = scratch();
     try {
       const scriptRel = join("node_modules", "@openai", "codex", "bin", "codex.js");
@@ -46,6 +49,7 @@ describe("resolveShimTarget", () => {
   });
 
   it("harvests NODE_PATH from pnpm-style shims", () => {
+    if (process.platform !== "win32") return;
     const dir = scratch();
     try {
       const scriptRel = join("global", "5", "tool", "cli.js");
