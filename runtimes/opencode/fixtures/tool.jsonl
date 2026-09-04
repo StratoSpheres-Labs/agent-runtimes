@@ -1,0 +1,2 @@
+{"type":"tool","id":"t1","name":"bash","input":{"cmd":"ls"}}
+{"type":"tool_result","id":"t1","output":{"exitCode":0}}

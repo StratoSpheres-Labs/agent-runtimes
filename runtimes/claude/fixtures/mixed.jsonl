@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"thinking..."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file":"a.txt"}}]}}
+{"type":"tool_result","tool_use_id":"t1","content":"content"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"result","subtype":"success"}

@@ -1,0 +1,5 @@
+{"type":"text","text":"start"}
+{"type":"tool","id":"t1","name":"bash","input":{"cmd":"echo hi"}}
+{"type":"tool_result","id":"t1","output":{"stdout":"hi"}}
+{"type":"text_delta","text":" done"}
+{"type":"done"}

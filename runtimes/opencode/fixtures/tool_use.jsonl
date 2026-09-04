@@ -1,0 +1,2 @@
+{"type":"tool_use","timestamp":1788485163514,"sessionID":"ses_1","part":{"type":"tool","tool":"read","callID":"call_0de3","state":{"status":"completed","input":{"filePath":"D:\\AAA"}}}}
+{"type":"tool_use","timestamp":1788485164057,"sessionID":"ses_1","part":{"type":"tool","tool":"glob","callID":"call_16f5","state":{"status":"completed","input":{"pattern":"**/*.ts"}}}}

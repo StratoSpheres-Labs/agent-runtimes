@@ -1,0 +1,8 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"customize-opencode","description":"opencode config helper"}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"agent_thought_chunk","messageId":"m1","content":{"type":"text","text":"planning"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"hello"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":" world"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"read","kind":"read","status":"pending","rawInput":{"filePath":"a.txt"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"in_progress","kind":"read"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","kind":"read","content":[{"type":"content","content":{"type":"text","text":"ok"}}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fixture","update":{"sessionUpdate":"usage_update","used":5,"size":100}}}

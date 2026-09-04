@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"P:ECHO:MCP42","tool_use_id":"toolu_01test"}]},"parent_tool_use_id":null,"session_id":"ses_mcp_1"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"P:ECHO:MCP42"}]}}
+{"type":"result","subtype":"success"}

@@ -1,0 +1,3 @@
+{"type":"item.started","item":{"type":"command_execution","id":"c1"}}
+{"type":"item.completed","item":{"type":"command_execution","id":"c1"}}
+{"type":"turn.completed","status":"completed"}

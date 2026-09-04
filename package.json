@@ -1,0 +1,61 @@
+{
+  "name": "agent-runtimes",
+  "version": "0.1.0",
+  "description": "Universal runtime layer for local AI coding agents — unified Runtime → Session → Run → RuntimeEvent API",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent",
+    "runtime",
+    "opencode",
+    "claude",
+    "codex",
+    "compatibility-layer",
+    "ai"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agent-runtimes": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtimes/opencode": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "example": "tsx examples/basic.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.13.0",
+    "eslint": "^9.20.0",
+    "eslint-config-prettier": "^10.0.0",
+    "prettier": "^3.4.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.23.13",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^3.0.0"
+  }
+}
