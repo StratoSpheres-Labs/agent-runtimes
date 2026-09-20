@@ -102,11 +102,12 @@ describe("isExecutableFile", () => {
       // posix: batch suffixes are dead weight even with the +x bit set.
       expect(isExecutableFile(cmd, "linux")).toBe(false);
       expect(isExecutableFile(ps1, "linux")).toBe(false);
-      expect(isExecutableFile(exe, "linux")).toBe(false);
-      // posix bare files follow the executable bit (effective where chmod works).
+      // posix bare/.exe files follow the executable bit (effective where
+      // chmod works); .exe stays fail-open for misnamed native binaries.
       if (process.platform !== "win32") {
-        chmodSync(bare, 0o755);
+        for (const f of [bare, exe]) chmodSync(f, 0o755);
         expect(isExecutableFile(bare, "linux")).toBe(true);
+        expect(isExecutableFile(exe, "linux")).toBe(true);
         chmodSync(bare, 0o644);
         expect(isExecutableFile(bare, "linux")).toBe(false);
       }

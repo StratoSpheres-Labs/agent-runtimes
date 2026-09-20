@@ -13,8 +13,10 @@ import { compareSemver, parseSemver } from "./version.js";
  * - win32: PATHEXT match required. Bare (extensionless) files are rejected:
  *   CreateProcess cannot run them, and real Windows binaries always carry
  *   an extension. (Escape hatch: explicit `*_BIN` overrides bypass this.)
- * - POSIX: the executable bit decides, except batch/Windows-only suffixes
- *   (`.cmd`, `.bat`, `.ps1`, `.exe`, `.com`), which no shebang can rescue.
+ * - POSIX: the executable bit decides, except batch suffixes (`.cmd`,
+ *   `.bat`, `.ps1`, `.com`), which no shebang can rescue. `.exe` stays
+ *   bit-gated (fail-open): a misnamed native binary with `+x` is a
+ *   candidate, the spawn probe decides.
  * Never throws. `platform` is injectable for hermetic cross-platform tests.
  */
 export function isExecutableFile(
@@ -38,7 +40,7 @@ export function isExecutableFile(
     return ok.includes(ext);
   }
   const posixExt = extname(candidate).trim().toUpperCase();
-  if ([".CMD", ".BAT", ".PS1", ".EXE", ".COM"].includes(posixExt)) return false;
+  if ([".CMD", ".BAT", ".PS1", ".COM"].includes(posixExt)) return false;
   try {
     accessSync(candidate, constants.X_OK);
     return true;
