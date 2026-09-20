@@ -9,10 +9,13 @@ import { OpencodeParser } from "./parser.js";
 import { opencodeDefinition } from "./definition.js";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
 import type { McpServer } from "../../src/definition/mcp.js";
+import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
+import { readOpencodeTranscript } from "./transcript.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
+import { resolveLaunch } from "../../src/discovery/launch.js";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -28,7 +31,7 @@ export class OpencodeSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly model: string | undefined;
   private readonly reasoning: ReasoningOptions | undefined;
-  private readonly mcpServers: McpServer[] | undefined;
+  public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly stagedImages: string[] = [];
 
@@ -75,17 +78,21 @@ export class OpencodeSession implements AgentSession {
         return file;
       }) ?? [];
     const args = [...baseArgs, ...imageFiles.flatMap((f) => ["-f", f])];
+    // Shim-aware spawn (win32 npm `.cmd` needs host node); native binaries
+    // pass through untouched. Launch env seeds the agent env merge.
+    const launch = resolveLaunch(this.command || opencodeDefinition.executable.command);
+    const baseEnv = launch.env ?? process.env;
     // MCP travels via env (no CLI flag): merge over the ambient env 鈥?    // spawn replaces (never merges), so spreading process.env is required.
     const mcpConfig =
       this.mcpServers && this.mcpServers.length > 0
         ? buildOpencodeMcpConfig(this.mcpServers)
         : undefined;
     const env = mcpConfig
-      ? buildAgentEnv("opencode", process.env, { OPENCODE_CONFIG_CONTENT: mcpConfig })
-      : buildAgentEnv("opencode", process.env);
+      ? buildAgentEnv("opencode", baseEnv, { OPENCODE_CONFIG_CONTENT: mcpConfig })
+      : buildAgentEnv("opencode", baseEnv);
     const run = new DefaultRun(runId, {
-      command: this.command || opencodeDefinition.executable.command,
-      args,
+      command: launch.command,
+      args: [...launch.prependArgs, ...args],
       cwd: this.cwd,
       stdinData: prompt,
       env: Object.keys(env).length > 0 ? env : undefined,
@@ -110,7 +117,9 @@ export class OpencodeSession implements AgentSession {
                 model: self.model,
                 updatedAt: Date.now(),
               });
-            } catch (_e: unknown) { String(_e); }
+            } catch (_e: unknown) {
+              String(_e);
+            }
           }
           yield e;
         }
@@ -121,6 +130,12 @@ export class OpencodeSession implements AgentSession {
 
   public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
     return this.inner.run(prompt, options);
+  }
+
+  public async history(options?: HistoryOptions): Promise<TranscriptEntry[]> {
+    // No successful run yet → no native id → no transcript (not an error).
+    if (!this.opencodeSessionId) return [];
+    return readOpencodeTranscript({ sessionId: this.opencodeSessionId, ...options });
   }
 
   public async resume(): Promise<void> {
@@ -149,11 +164,3 @@ export class OpencodeSession implements AgentSession {
     return this.opencodeSessionId;
   }
 }
-
-
-
-
-
-
-
-

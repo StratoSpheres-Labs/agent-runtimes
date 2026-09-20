@@ -26,10 +26,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./runtimes/opencode": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
     }
   },
   "files": [
@@ -43,8 +39,11 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "example": "tsx examples/basic.ts"
+    "example": "tsx examples/basic.ts",
+    "test:e2e:round1": "tsx test/e2e-round1.ts",
+    "test:e2e:round2": "tsx test/e2e-round2.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

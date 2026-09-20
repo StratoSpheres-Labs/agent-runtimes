@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { EventStream } from "../events/event-stream.js";
 import type { RuntimeEvent } from "../events/runtime-event.js";
+import { asJsonValue } from "../events/runtime-event.js";
 import type { ProcessExit } from "./lifecycle.js";
 import { RuntimeProtocolError, RuntimeTimeoutError } from "./errors.js";
 import { type AcpTransport, buildAcpMcpServers } from "../transport/acp.js";
@@ -100,6 +101,15 @@ export class AcpRun implements AgentRun {
   }
 
   /**
+   * Stamp every emitted event with this Run's id. Parser output arrives
+   * unstamped; an explicitly set runId is never overwritten.
+   */
+  private push(event: RuntimeEvent): void {
+    if (event.runId === undefined) event.runId = this.id;
+    this.stream.push(event);
+  }
+
+  /**
    * Handshake then prompt. Rejects (never half-starts) when initialize,
    * session/new, or set_model fails, so callers observe setup errors
    * instead of a silent dead run.
@@ -115,7 +125,9 @@ export class AcpRun implements AgentRun {
           return { optionId: res.optionId };
         }
         // Any other client method without a handler → -32601
-        const err = new Error(`Method not implemented: ${method} -32601`) as Error & { code?: number };
+        const err = new Error(`Method not implemented: ${method} -32601`) as Error & {
+          code?: number;
+        };
         err.code = -32601;
         throw err;
       });
@@ -156,14 +168,14 @@ export class AcpRun implements AgentRun {
       }
     }
     this.sessionId = sessionId;
-    this.stream.push({ type: "session_started", sessionId });
+    this.push({ type: "session_started", sessionId });
     if (this.model !== undefined) {
       await this.transport.request("session/set_model", { sessionId, modelId: this.model });
     }
     this.unsubscribe = this.transport.onMessage((msg) => {
       if (this.finished) return;
       if (typeof msg.method === "string" && msg.method === "session/update") {
-        for (const e of this.parser.parseMessage(msg)) this.stream.push(e);
+        for (const e of this.parser.parseMessage(msg)) this.push(e);
       }
     });
     const promptParts: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
@@ -174,11 +186,7 @@ export class AcpRun implements AgentRun {
       }
     }
     void this.transport
-      .request(
-        "session/prompt",
-        { sessionId, prompt: promptParts },
-        { timeoutMs: this.timeoutMs },
-      )
+      .request("session/prompt", { sessionId, prompt: promptParts }, { timeoutMs: this.timeoutMs })
       .then(
         (res) => {
           this.finishTurnOk(res);
@@ -210,6 +218,10 @@ export class AcpRun implements AgentRun {
     if (!this.finished) {
       this.finished = true;
       this.unsubscribe?.();
+      // Terminal event for the cancel path (`cancel()` funnels through
+      // here): consumers can tell "cancelled" apart from "stream cut".
+      // Normal turns set `finished` first, so no duplicate is possible.
+      this.push({ type: "done" });
       this.stream.close();
       this.completionResolve?.({ code: null, signal: null });
     }
@@ -232,21 +244,36 @@ export class AcpRun implements AgentRun {
       if (typeof usage === "object" && usage !== null) usageRaw = usage as Record<string, unknown>;
     }
     if (usageRaw !== undefined) {
-      this.stream.push({
+      this.push({
         type: "usage",
-        inputTokens: typeof usageRaw["inputTokens"] === "number" ? usageRaw["inputTokens"] : typeof usageRaw["input_tokens"] === "number" ? usageRaw["input_tokens"] : undefined,
-        outputTokens: typeof usageRaw["outputTokens"] === "number" ? usageRaw["outputTokens"] : typeof usageRaw["output_tokens"] === "number" ? usageRaw["output_tokens"] : undefined,
-        costUsd: typeof usageRaw["cost"] === "number" ? usageRaw["cost"] : typeof usageRaw["costUsd"] === "number" ? usageRaw["costUsd"] : undefined,
-        raw: res,
+        inputTokens:
+          typeof usageRaw["inputTokens"] === "number"
+            ? usageRaw["inputTokens"]
+            : typeof usageRaw["input_tokens"] === "number"
+              ? usageRaw["input_tokens"]
+              : undefined,
+        outputTokens:
+          typeof usageRaw["outputTokens"] === "number"
+            ? usageRaw["outputTokens"]
+            : typeof usageRaw["output_tokens"] === "number"
+              ? usageRaw["output_tokens"]
+              : undefined,
+        costUsd:
+          typeof usageRaw["cost"] === "number"
+            ? usageRaw["cost"]
+            : typeof usageRaw["costUsd"] === "number"
+              ? usageRaw["costUsd"]
+              : undefined,
+        raw: asJsonValue(res),
       });
     }
     if (stopReason !== null && stopReason !== "end_turn") {
-      this.stream.push({
+      this.push({
         type: "error",
         error: { code: "STOP_REASON", message: `Turn ended: ${stopReason}` },
       });
     }
-    this.stream.push({ type: "done" });
+    this.push({ type: "done" });
     this.stream.close();
     this.unsubscribe?.();
     this.completionResolve?.({ code: 0, signal: null });
@@ -256,14 +283,14 @@ export class AcpRun implements AgentRun {
     if (this.finished) return;
     this.finished = true;
     const e = err instanceof Error ? err : new Error(String(err));
-    this.stream.push({
+    this.push({
       type: "error",
       error: {
         code: e instanceof RuntimeTimeoutError ? "TIMEOUT" : "TURN_FAILED",
         message: e.message,
       },
     });
-    this.stream.push({ type: "done" });
+    this.push({ type: "done" });
     this.stream.close();
     this.unsubscribe?.();
     this.completionReject?.(e);
@@ -271,7 +298,8 @@ export class AcpRun implements AgentRun {
 }
 
 function toPermissionRequest(method: string, params: unknown): PermissionRequest {
-  const rec = typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
+  const rec =
+    typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
   const rawOpts = Array.isArray(rec["options"]) ? rec["options"] : [];
   const options = rawOpts
     .filter((o): o is Record<string, unknown> => typeof o === "object" && o !== null)

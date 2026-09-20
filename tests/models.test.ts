@@ -12,6 +12,8 @@ describe("discoverModels", () => {
     expect(models).toEqual(fallback);
   });
 
+  // Catalog calls hit the network and regularly take >8s — generous
+  // timeout so slow links don't flake this live test.
   it("discovers opencode models live (if installed) or falls back", async () => {
     const fallback = opencodeDefinition.models?.fallbackModels ?? [];
     // Resolve first: bare-name spawn can hit a stale/broken shim whose
@@ -22,7 +24,7 @@ describe("discoverModels", () => {
     // Live opencode returns provider/model ids
     const first = models[0];
     expect(first?.id).toContain("/");
-  }, 15000);
+  }, 30000);
 });
 
 describe("Runtime.models()", () => {

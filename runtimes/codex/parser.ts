@@ -1,5 +1,6 @@
 import { JsonlParser } from "../../src/parser/jsonl.js";
 import type { RuntimeEvent } from "../../src/events/runtime-event.js";
+import { asJsonValue } from "../../src/events/runtime-event.js";
 import type { RuntimeParser } from "../../src/parser/parser.js";
 
 function asString(value: unknown): string | undefined {
@@ -13,6 +14,10 @@ function asString(value: unknown): string | undefined {
  *  {"type":"turn.started"}                                     → ignored (transport marker)
  *  {"type":"item.started","item":{"type":"command_execution",
  *    "id":"..."}}                                               → tool_started
+ *  {"type":"item.started","item":{"type":"reasoning",...}}      → ignored
+ *  {"type":"item.completed","item":{"type":"reasoning",
+ *    "text":"..."}}                                              → reasoning_delta
+ *                                                                 (empty → dropped)
  *  {"type":"item.completed","item":{"type":"command_execution",
  *    "id":"...",...}}                                           → tool_finished
  *  {"type":"item.completed","item":{"type":"agent_message",
@@ -94,10 +99,27 @@ export class CodexParser implements RuntimeParser {
           return [
             {
               type: "usage",
-              inputTokens: typeof usage["input_tokens"] === "number" ? usage["input_tokens"] : typeof usage["inputTokens"] === "number" ? usage["inputTokens"] : undefined,
-              outputTokens: typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : typeof usage["outputTokens"] === "number" ? usage["outputTokens"] : typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : undefined,
-              costUsd: typeof usage["cost"] === "number" ? usage["cost"] : typeof rec["cost"] === "number" ? rec["cost"] : undefined,
-              raw: rec,
+              inputTokens:
+                typeof usage["input_tokens"] === "number"
+                  ? usage["input_tokens"]
+                  : typeof usage["inputTokens"] === "number"
+                    ? usage["inputTokens"]
+                    : undefined,
+              outputTokens:
+                typeof usage["output_tokens"] === "number"
+                  ? usage["output_tokens"]
+                  : typeof usage["outputTokens"] === "number"
+                    ? usage["outputTokens"]
+                    : typeof usage["output_tokens"] === "number"
+                      ? usage["output_tokens"]
+                      : undefined,
+              costUsd:
+                typeof usage["cost"] === "number"
+                  ? usage["cost"]
+                  : typeof rec["cost"] === "number"
+                    ? rec["cost"]
+                    : undefined,
+              raw: asJsonValue(rec),
             },
             { type: "done" },
           ];
@@ -116,25 +138,36 @@ export class CodexParser implements RuntimeParser {
       }
       case "item.started": {
         const item = rec["item"] as Record<string, unknown> | undefined;
+        // Reasoning only ever arrives as item.completed (codex source:
+        // AgentReasoning → ItemCompleted with the full text) — a started
+        // reasoning item would only produce a fake tool_start, so skip it.
+        if (item?.["type"] === "reasoning") return [];
         return [
           {
             type: "tool_started",
             id: asString(item?.["id"]) ?? "tool_0",
             name: asString(item?.["type"]) ?? "tool",
-            input: item,
+            input: asJsonValue(item),
           },
         ];
       }
       case "item.completed": {
         const item = rec["item"] as Record<string, unknown> | undefined;
         const id = asString(item?.["id"]) ?? "tool_0";
+        // Reasoning summaries are display-only thinking — never tool
+        // events (previously they surfaced as tool_started/tool_finished
+        // with name "reasoning"). Empty text → dropped, not errored.
+        if (item?.["type"] === "reasoning") {
+          const text = asString(item["text"]) ?? "";
+          return text ? [{ type: "reasoning_delta", text }] : [];
+        }
         const events: RuntimeEvent[] = [];
         // Agent messages carry the model text — surface it as text_delta
         // (it appears nowhere else in the stream).
         if (item?.["type"] === "agent_message" && typeof item["text"] === "string") {
           events.push({ type: "text_delta", text: item["text"] });
         }
-        events.push({ type: "tool_finished", id, output: item });
+        events.push({ type: "tool_finished", id, output: asJsonValue(item) });
         return events;
       }
       default: {

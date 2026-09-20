@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import {
-  normalizeWorkspaceAllowedPaths,
-} from "../src/definition/workspace.js";
+import { normalizeWorkspaceAllowedPaths } from "../src/definition/workspace.js";
 import { capabilitiesFromHelp } from "../src/discovery/capabilities.js";
 import { buildClaudeArgs } from "../runtimes/claude/definition.js";
 import { buildCodexArgs } from "../runtimes/codex/definition.js";
@@ -45,7 +43,9 @@ describe("capabilitiesFromHelp workspace gating", () => {
     expect(capabilitiesFromHelp(base, { "--sandbox": true }).workspace).toBe(true);
     expect(capabilitiesFromHelp(base, { "-C": true }).workspace).toBe(true);
     expect(capabilitiesFromHelp(base, { "--permission-mode": true }).workspace).toBe(true);
-    expect(capabilitiesFromHelp(base, { "--dangerously-skip-permissions": true }).workspace).toBe(true);
+    expect(capabilitiesFromHelp(base, { "--dangerously-skip-permissions": true }).workspace).toBe(
+      true,
+    );
     expect(capabilitiesFromHelp(base, {}).workspace).toBe(false);
   });
 });
@@ -58,7 +58,9 @@ describe("buildArgs workspace mapping", () => {
   });
 
   it("claude dangerouslySkipPermissions → --dangerously-skip-permissions (open-design bypass alias)", () => {
-    expect(buildClaudeArgs({ dangerouslySkipPermissions: true })).toContain("--dangerously-skip-permissions");
+    expect(buildClaudeArgs({ dangerouslySkipPermissions: true })).toContain(
+      "--dangerously-skip-permissions",
+    );
     expect(buildClaudeArgs({})).not.toContain("--dangerously-skip-permissions");
   });
 
@@ -66,12 +68,12 @@ describe("buildArgs workspace mapping", () => {
     expect(buildCodexArgs({ addDirs: ["/a"], sandboxMode: "workspace-write" })).toEqual(
       expect.arrayContaining(["-C", "/a", "--sandbox", "workspace-write"]),
     );
+    expect(buildCodexArgs({ resumeThreadId: "thr_1", sandboxMode: "workspace-write" })).toEqual(
+      expect.arrayContaining(["-c", 'sandbox_mode="workspace-write"', "thr_1"]),
+    );
     expect(
       buildCodexArgs({ resumeThreadId: "thr_1", sandboxMode: "workspace-write" }),
-    ).toEqual(expect.arrayContaining(['-c', 'sandbox_mode="workspace-write"', "thr_1"]));
-    expect(buildCodexArgs({ resumeThreadId: "thr_1", sandboxMode: "workspace-write" })).not.toContain(
-      "--sandbox",
-    );
+    ).not.toContain("--sandbox");
   });
 });
 

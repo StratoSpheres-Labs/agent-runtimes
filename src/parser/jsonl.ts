@@ -1,5 +1,13 @@
 import type { RuntimeEvent } from "../events/runtime-event.js";
+import { asJsonValue } from "../events/runtime-event.js";
 import type { RuntimeParser } from "./parser.js";
+
+/**
+ * Recognized-but-empty envelope (e.g. encrypted-only reasoning with no
+ * displayable text): drop silently, distinct from `null` (unparseable →
+ * INVALID_JSON error event).
+ */
+const DROP = Symbol("drop");
 
 /**
  * JsonlParser — handles:
@@ -40,6 +48,7 @@ export class JsonlParser implements RuntimeParser {
       const line = raw.trim();
       if (line.length === 0) continue;
       const ev = this.parseLine(line);
+      if (ev === DROP) continue;
       if (ev) events.push(ev);
       else {
         // Illegal JSON → error event, not thrown (keeps stream alive)
@@ -53,19 +62,21 @@ export class JsonlParser implements RuntimeParser {
     if (isFlush && this.buffer.trim().length > 0) {
       const line = this.buffer.trim();
       const ev = this.parseLine(line);
-      if (ev) events.push(ev);
-      else {
-        events.push({
-          type: "error",
-          error: { code: "INVALID_JSON", message: `Invalid JSON: ${line.slice(0, 200)}` },
-        });
+      if (ev !== DROP) {
+        if (ev) events.push(ev);
+        else {
+          events.push({
+            type: "error",
+            error: { code: "INVALID_JSON", message: `Invalid JSON: ${line.slice(0, 200)}` },
+          });
+        }
       }
       this.buffer = "";
     }
     return events;
   }
 
-  private parseLine(line: string): RuntimeEvent | null {
+  private parseLine(line: string): RuntimeEvent | null | typeof DROP {
     let obj: unknown;
     try {
       obj = JSON.parse(line) as unknown;
@@ -85,17 +96,31 @@ export class JsonlParser implements RuntimeParser {
         const text = typeof rec["text"] === "string" ? (rec["text"] as string) : "";
         return { type: "text_delta", text };
       }
+      case "reasoning_delta":
+      case "reasoning": {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        const text = typeof rec["text"] === "string" ? (rec["text"] as string) : "";
+        // Empty thinking (e.g. encrypted-only reasoning parts) is a valid
+        // envelope with nothing displayable — drop, don't error.
+        if (!text) return DROP;
+        return { type: "reasoning_delta", text };
+      }
       case "tool_started": {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
         const id = typeof rec["id"] === "string" ? (rec["id"] as string) : "tool_0";
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
         const name = typeof rec["name"] === "string" ? (rec["name"] as string) : "tool";
-        return { type: "tool_started", id, name, input: rec["input"] };
+        return { type: "tool_started", id, name, input: asJsonValue(rec["input"]) };
       }
       case "tool_finished": {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
         const id = typeof rec["id"] === "string" ? (rec["id"] as string) : "tool_0";
-        return { type: "tool_finished", id, output: rec["output"], error: Boolean(rec["error"]) };
+        return {
+          type: "tool_finished",
+          id,
+          output: asJsonValue(rec["output"]),
+          error: Boolean(rec["error"]),
+        };
       }
       case "error": {
         const err = rec["error"] as { code?: string; message?: string } | undefined;
@@ -126,7 +151,7 @@ export class JsonlParser implements RuntimeParser {
           cacheTokens: typeof rec["cacheTokens"] === "number" ? rec["cacheTokens"] : undefined,
           costUsd: typeof rec["costUsd"] === "number" ? rec["costUsd"] : undefined,
           model: typeof rec["model"] === "string" ? rec["model"] : undefined,
-          raw: rec["raw"],
+          raw: asJsonValue(rec["raw"]),
         };
       }
       default: {

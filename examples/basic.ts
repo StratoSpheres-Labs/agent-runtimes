@@ -9,6 +9,7 @@ import { runtimes } from "../src/index.js";
 import { OpencodeParser } from "../runtimes/opencode/parser.js";
 import { buildOpencodeArgs } from "../runtimes/opencode/definition.js";
 import { OpencodeRuntime } from "../runtimes/opencode/runtime.js";
+import { resolveLaunch } from "../src/discovery/launch.js";
 import { spawn } from "node:child_process";
 
 async function main(): Promise<void> {
@@ -25,11 +26,15 @@ async function main(): Promise<void> {
 
   // Low-level demo: spawn + parse without Session
   // Spawn the absolute path from detect() — never the bare name (see docs/cross-platform.md §1).
+  // Go through resolveLaunch like every real consumer: the path may be a
+  // win32 shim that CreateProcess cannot execute directly.
   const args = buildOpencodeArgs({ format: "json" });
-  const child = spawn(status.executable, [...args, "hi"], {
+  const launch = resolveLaunch(status.executable);
+  const child = spawn(launch.command, [...launch.prependArgs, ...args, "hi"], {
     stdio: ["pipe", "pipe", "pipe"],
     shell: false,
     windowsHide: true,
+    env: launch.env ?? process.env,
   });
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (child.stdin) child.stdin.end();

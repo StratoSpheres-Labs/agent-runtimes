@@ -8,8 +8,11 @@ import { buildCodexArgs } from "./definition.js";
 import { CodexParser } from "./parser.js";
 import { codexDefinition } from "./definition.js";
 import { RuntimeSessionError } from "../../src/core/errors.js";
+import { resolve } from "node:path";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
 import type { McpServer } from "../../src/definition/mcp.js";
+import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
+import { readCodexTranscript } from "./transcript.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { normalizeWorkspaceAllowedPaths } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
@@ -34,7 +37,7 @@ export class CodexSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly model: string | undefined;
   private readonly reasoning: ReasoningOptions | undefined;
-  private readonly mcpServers: McpServer[] | undefined;
+  public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly stagedImages: string[] = [];
 
@@ -88,6 +91,7 @@ export class CodexSession implements AgentSession {
         model: this.model,
         reasoning: this.reasoning,
         resumeThreadId: this.codexThreadId ?? undefined,
+        cwd: this.cwd ? resolve(this.cwd) : undefined,
         addDirs: normalizeWorkspaceAllowedPaths(this.workspace?.allowedPaths, this.cwd),
         sandboxMode: this.workspace?.sandboxMode,
         images: imageFiles.length > 0 ? imageFiles : undefined,
@@ -121,7 +125,9 @@ export class CodexSession implements AgentSession {
                 model: self.model,
                 updatedAt: Date.now(),
               });
-            } catch (_e: unknown) { String(_e); }
+            } catch (_e: unknown) {
+              String(_e);
+            }
           }
           yield e;
         }
@@ -132,6 +138,12 @@ export class CodexSession implements AgentSession {
 
   public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
     return this.inner.run(prompt, options);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  public async history(options?: HistoryOptions): Promise<TranscriptEntry[]> {
+    if (!this.codexThreadId) return [];
+    return readCodexTranscript({ sessionId: this.codexThreadId, ...options });
   }
 
   public async resume(): Promise<void> {
@@ -159,11 +171,3 @@ export class CodexSession implements AgentSession {
     return this.codexThreadId;
   }
 }
-
-
-
-
-
-
-
-

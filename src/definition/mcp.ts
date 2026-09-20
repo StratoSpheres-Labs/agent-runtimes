@@ -18,3 +18,16 @@ export interface McpServer {
   /** Extra env for the server process (merged over the ambient env). */
   env?: Record<string, string>;
 }
+
+/**
+ * Discovered MCP server — Phase 33 (query what the agent knows).
+ * `command` may be absent when the agent only reports a name/status
+ * (e.g. `claude mcp list` in a non-trusted dir). `status` is the
+ * agent's own string (connected/disconnected/failed) — never a secret.
+ */
+export interface McpServerInfo {
+  name: string;
+  command?: string;
+  status?: string;
+  source?: string;
+}

@@ -14,7 +14,11 @@ export interface AgentRun {
   readonly id: string;
   /** Async stream of unified events — only RuntimeEvent ever leaks */
   events(): AsyncIterable<RuntimeEvent>;
-  /** Cancel this run's underlying process */
+  /**
+   * Cancel this run's underlying process. Always ends the event stream
+   * with a terminal `done` (carrying the kill signal) — `close()` alone
+   * is silent teardown and emits nothing.
+   */
   cancel(): Promise<void>;
   /** Wait for process exit */
   result(): Promise<ProcessExit>;
@@ -76,6 +80,16 @@ export class DefaultRun implements AgentRun {
     return this.stream;
   }
 
+  /**
+   * Stamp every emitted event with this Run's id (`<sessionId>:run<N>`).
+   * Parser output arrives unstamped (Rule 4); an explicitly set runId is
+   * never overwritten.
+   */
+  private push(event: RuntimeEvent): void {
+    if (event.runId === undefined) event.runId = this.id;
+    this.stream.push(event);
+  }
+
   /** Spawn the underlying process and wire stdout → RuntimeEvent */
   public spawn(): void {
     this.process.spawn();
@@ -89,7 +103,7 @@ export class DefaultRun implements AgentRun {
           const events = parser.parse(new Uint8Array(chunk));
           for (const e of events) {
             if (e.type === "done") this.sawDone = true;
-            this.stream.push(e);
+            this.push(e);
           }
         });
       } else {
@@ -97,7 +111,7 @@ export class DefaultRun implements AgentRun {
         stdout.on("data", (chunk: Buffer) => {
           const text = chunk.toString("utf-8");
           if (text.length > 0) {
-            this.stream.push({ type: "text_delta", text });
+            this.push({ type: "text_delta", text });
           }
         });
       }
@@ -110,7 +124,7 @@ export class DefaultRun implements AgentRun {
         stderr.on("data", (chunk: Buffer) => {
           const text = chunk.toString("utf-8").trim();
           if (text.length > 0) {
-            this.stream.push({
+            this.push({
               type: "error",
               error: { code: "STDERR", message: text },
             });
@@ -135,11 +149,11 @@ export class DefaultRun implements AgentRun {
           // Flush any buffered partial
           for (const e of parser.flush()) {
             if (e.type === "done") this.sawDone = true;
-            this.stream.push(e);
+            this.push(e);
           }
           if (!this.sawDone) {
             if (exit.code !== 0 && exit.code !== null) {
-              this.stream.push({
+              this.push({
                 type: "error",
                 error: {
                   code: "NON_ZERO_EXIT",
@@ -147,11 +161,12 @@ export class DefaultRun implements AgentRun {
                 },
               });
             }
-            this.stream.push({ type: "done", exitCode: exit.code, signal: exit.signal });
+            this.push({ type: "done", exitCode: exit.code, signal: exit.signal });
+            this.sawDone = true;
           }
         } else {
           if (exit.code !== 0 && exit.code !== null) {
-            this.stream.push({
+            this.push({
               type: "error",
               error: {
                 code: "NON_ZERO_EXIT",
@@ -159,15 +174,17 @@ export class DefaultRun implements AgentRun {
               },
             });
           }
-          this.stream.push({ type: "done", exitCode: exit.code, signal: exit.signal });
+          this.push({ type: "done", exitCode: exit.code, signal: exit.signal });
+          this.sawDone = true;
         }
         this.stream.close();
       },
       (err: unknown) => {
         this._done = true;
         const message = err instanceof Error ? err.message : String(err);
-        this.stream.push({ type: "error", error: { code: "PROCESS_ERROR", message } });
-        this.stream.push({ type: "done" });
+        this.push({ type: "error", error: { code: "PROCESS_ERROR", message } });
+        this.push({ type: "done" });
+        this.sawDone = true;
         this.stream.close();
       },
     );
@@ -175,12 +192,25 @@ export class DefaultRun implements AgentRun {
 
   public async cancel(): Promise<void> {
     if (this._done) return;
+    let exit: ProcessExit | null = null;
     try {
-      await this.process.cancel();
+      exit = await this.process.cancel();
     } catch (err) {
       throw new RuntimeSessionError((err as Error).message, {}, { cause: err as Error });
     } finally {
       this._done = true;
+      // Terminal event: without it consumers cannot tell "cancelled" apart
+      // from "stream cut". Carries the real kill exit (SIGTERM by default).
+      // Guarded by sawDone — the exit handler may have pushed the synthetic
+      // done first in a cancel-vs-exit race.
+      if (!this.sawDone) {
+        this.sawDone = true;
+        this.push({
+          type: "done",
+          exitCode: exit?.code ?? null,
+          signal: exit?.signal ?? "SIGTERM",
+        });
+      }
       this.stream.close();
     }
   }
@@ -202,13 +232,16 @@ export class DefaultRun implements AgentRun {
     this.stream.close();
   }
 
-  public async respondToPermission(id: string, optionId: string): Promise<void> {
-    // Claude AskUserQuestion answer — user envelope with tool_result
-    const payload =
-      JSON.stringify({
-        type: "user",
-        message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: optionId }] },
-      }) + "\n";
-    await this.process.write(payload);
+  // NOTE: no respondToPermission here — stdin answer envelopes are
+  // agent-specific wire shapes (Rule 6). Adapters that support interactive
+  // permission answers subclass DefaultRun (see ClaudeRun) and implement
+  // the AgentRun.respondToPermission slot with their native envelope.
+
+  /**
+   * Raw stdin write for subclasses composing their native envelopes.
+   * Bytes only — no agent shape is assumed here.
+   */
+  protected async writeStdin(data: string): Promise<void> {
+    await this.process.write(data);
   }
 }

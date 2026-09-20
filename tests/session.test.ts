@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RuntimeSessionError } from "../src/core/errors.js";
 import { DefaultSession } from "../src/core/session.js";
 
 describe("DefaultSession", () => {
@@ -35,11 +36,29 @@ describe("DefaultSession", () => {
 
   it("close is idempotent and cleans all runs", async () => {
     const session = new DefaultSession();
-    await session.run("a");
-    await session.run("b");
+    const ra = await session.run("a");
+    await ra.result();
+    const rb = await session.run("b");
+    await rb.result();
     await session.close();
     await session.close(); // second close must not throw
     await expect(session.run("after close")).rejects.toThrow();
+  });
+
+  it("second run while active rejects instead of silently cancelling", async () => {
+    const session = new DefaultSession();
+    const first = await session.run("long prompt");
+    expect(first.done).toBe(false);
+    await expect(session.run("second prompt")).rejects.toThrow(RuntimeSessionError);
+    // The first run is untouched — still active, still completable.
+    expect(first.done).toBe(false);
+    await session.cancel();
+    expect(first.done).toBe(true);
+    // Once the previous run settles, the session accepts new runs again.
+    const next = await session.run("after settle");
+    await next.result();
+    expect(next.done).toBe(true);
+    await session.close();
   });
 
   it("runFactory injection stays core-agnostic", async () => {

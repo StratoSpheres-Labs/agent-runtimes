@@ -31,6 +31,21 @@ describe("JsonlParser", () => {
     expect(evs.map((e) => e.type)).toEqual(["text_delta", "text_delta", "done"]);
   });
 
+  it("maps reasoning shapes to reasoning_delta; empty text drops silently", () => {
+    const p = new JsonlParser();
+    const evs = p.parse(
+      enc('{"type":"reasoning_delta","text":"hmm"}\n{"type":"reasoning","text":"ah"}\n'),
+    );
+    expect(evs).toEqual([
+      { type: "reasoning_delta", text: "hmm" },
+      { type: "reasoning_delta", text: "ah" },
+    ]);
+    // Empty text is a valid envelope with nothing displayable — dropped,
+    // and crucially NOT an INVALID_JSON error.
+    const dropped = p.parse(enc('{"type":"reasoning","text":""}\n'));
+    expect(dropped).toEqual([]);
+  });
+
   it("emits error event for illegal JSON", () => {
     const p = new JsonlParser();
     const evs = p.parse(enc("not json\n"));
@@ -56,6 +71,15 @@ describe("JsonlParser", () => {
     p.parse(enc('{"type":"done"}'));
     const flushed = p.flush();
     expect(flushed.map((e) => e.type)).toEqual(["done"]);
+  });
+
+  it("leaves runId unset — stamping is the Run's job (Rule 4)", () => {
+    const p = new JsonlParser();
+    const evs = p.parse(
+      enc('{"type":"text_delta","text":"a"}\n{"type":"session_started","sessionId":"s"}\n'),
+    );
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) expect(e.runId).toBeUndefined();
   });
 
   it("reset clears buffer", () => {

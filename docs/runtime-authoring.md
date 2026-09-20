@@ -19,7 +19,7 @@ See `Dev_Docs:1885-1911` and `runtimes/opencode/` as reference.
 
 1. **Definition** (`definition.ts`): fill `RuntimeDefinition` — `identity {id,name}`, `executable {command, versionArgs}`, `input {type:"stdin"|"argv"|"file"}`, `transport {type:"stdio"|"acp"}`, `capabilities {streaming, sessionResume, modelSelection, reasoning, images, workspace}`, `session {persistent}`.
 
-2. **buildArgs()**: implement `buildArgs(options): string[]` that hides all CLI flags (`--resume`, `-s`, `--model`, `--variant`, etc.) — Rule 2. Example (`runtimes/opencode/definition.ts:1`):
+2. **buildArgs()**: implement `buildArgs(options): string[]` that hides all CLI flags (`--resume`, `-s`, `--model`, `--variant`, etc.) — Rule 2. Caller-supplied values that ride argv MUST be validated: `model` goes through `sanitizeModelId()` (`src/definition/model.ts:1`) and invalid ids throw `RuntimeSessionError` — never let a flag-shaped value reach the CLI. Example (`runtimes/opencode/definition.ts:1`):
 
    ```ts
    export function buildOpencodeArgs(o: { model?; sessionId?; variant?; agent? }) {
@@ -27,16 +27,19 @@ See `Dev_Docs:1885-1911` and `runtimes/opencode/` as reference.
      if (o.model) a.push("--model", o.model);
     if (o.sessionId) a.push("--session", o.sessionId);
     return a;
-  }
-  ```
+   ```
 
-   MCP servers (Phase 21) ride `CreateSessionOptions.mcpServers` (`src/definition/mcp.ts:1`) — translate per adapter, never leak the wire shape: claude `--mcp-config` temp file (session-owned, deleted on close) + scoped `--allowedTools mcp__<server>__*`; opencode CLI `OPENCODE_CONFIG_CONTENT` env (merged over `process.env` — spawn replaces); ACP `mcpServers[]` in `session/new` + `session/load` (`buildAcpMcpServers`). No support (codex) → throw `RuntimeSessionError`, never silently drop.
+}
 
-   Workspace constraints (Phase 23) ride `CreateSessionOptions.workspace` (`src/definition/workspace.ts:1`) — `allowedPaths` → claude `--add-dir` / codex `-C`, `permissionMode` → `--permission-mode`, `dangerouslySkipPermissions` → `--dangerously-skip-permissions`, `sandboxMode` → `--sandbox` or `-c sandbox_mode`. Paths are `resolve()`d against `cwd` (or `process.cwd()`), deduped, filtered. Opencode/ACP has no native flag — accepted but ignored (never error). `permissionMode:"bypassPermissions"` is the open-design replication (trusted workspace); `dangerouslySkipPermissions:true` is an explicit dangerous alias.
+````
 
-   Permissions (Phase 24/29): ACP `agent → client` requests (`session/request_permission`, `fs/*`) are served via `CreateSessionOptions.onPermissionRequest` (`src/definition/permission.ts:1`). When installed, `AcpTransport` delegates to the handler and returns `{optionId}`; otherwise `-32601` (never stall). Claude interactive `AskUserQuestion` is mapped to `permission_request` (`runtimes/claude/parser.ts:1`) and auto-answered via the same `onPermissionRequest` with `keepStdinOpen` duplex (`src/core/run.ts:1`); bypass mode (`permissionMode:"bypassPermissions"` or `dangerouslySkipPermissions:true`) skips the prompt entirely.
+ MCP servers (Phase 21) ride `CreateSessionOptions.mcpServers` (`src/definition/mcp.ts:1`) — translate per adapter, never leak the wire shape: claude `--mcp-config` temp file (session-owned, deleted on close) + scoped `--allowedTools mcp__<server>__*`; opencode CLI `OPENCODE_CONFIG_CONTENT` env (merged over `process.env` — spawn replaces); ACP `mcpServers[]` in `session/new` + `session/load` (`buildAcpMcpServers`). No support (codex) → throw `RuntimeSessionError`, never silently drop.
 
-   Usage/cost (Phase 25): parsers emit `usage` (`src/events/runtime-event.ts:1`) — ACP `usage_update`, Claude `result.usage|total_cost_usd`, Codex `turn.completed.usage`, plus generic `{"type":"usage"}`. ACP `result.usage` is also surfaced in `AcpRun.finishTurnOk` before `done`.
+ Workspace constraints (Phase 23) ride `CreateSessionOptions.workspace` (`src/definition/workspace.ts:1`) — `allowedPaths` → claude `--add-dir` / codex `-C`, `permissionMode` → `--permission-mode`, `dangerouslySkipPermissions` → `--dangerously-skip-permissions`, `sandboxMode` → `--sandbox` or `-c sandbox_mode`. Paths are `resolve()`d against `cwd` (or `process.cwd()`), deduped, filtered. Opencode/ACP has no native flag — accepted but ignored (never error). `permissionMode:"bypassPermissions"` is the open-design replication (trusted workspace); `dangerouslySkipPermissions:true` is an explicit dangerous alias.
+
+ Permissions (Phase 24/29): ACP `agent → client` requests (`session/request_permission`, `fs/*`) are served via `CreateSessionOptions.onPermissionRequest` (`src/definition/permission.ts:1`). When installed, `AcpTransport` delegates to the handler and returns `{optionId}`; otherwise `-32601` (never stall). Claude interactive `AskUserQuestion` is mapped to `permission_request` (`runtimes/claude/parser.ts:1`) and auto-answered via the same `onPermissionRequest` with `keepStdinOpen` duplex (`src/core/run.ts:1`); bypass mode (`permissionMode:"bypassPermissions"` or `dangerouslySkipPermissions:true`) skips the prompt entirely.
+
+ Usage/cost (Phase 25): parsers emit `usage` (`src/events/runtime-event.ts:1`) — ACP `usage_update`, Claude `result.usage|total_cost_usd`, Codex `turn.completed.usage`, plus generic `{"type":"usage"}`. ACP `result.usage` is also surfaced in `AcpRun.finishTurnOk` before `done`.
 
 3. **Parser** (`parser.ts`): implement `RuntimeParser` (Rule 4 — no process control). Reuse `JsonlParser` for JSONL streams; handle partial chunks, coalesced lines, illegal JSON, unknown types, empty input. Extend for agent quirks (e.g., `runtimes/opencode/parser.ts:1` normalizes `part.text` and `step_start/finish`).
 
@@ -45,25 +48,36 @@ See `Dev_Docs:1885-1911` and `runtimes/opencode/` as reference.
 5. **Fixtures** (`fixtures/*.jsonl`): add samples `text.jsonl`, `tool.jsonl`, `error.jsonl`, `done.jsonl`, `mixed.jsonl`, `illegal.jsonl`, `unknown.jsonl`, `empty.jsonl`, plus a `real-<agent>.jsonl` captured from `command run --format json`. Each must parse to `RuntimeEvent[]` only.
 
 6. **Register** (with a concrete factory — otherwise `resolve()` yields a
-   generic `DefaultRuntime` stub without your wired `createSession`):
+ generic `DefaultRuntime` stub without your wired `createSession`):
 
-   ```ts
-   import { RuntimeRegistry } from "agent-runtimes";
-   import { myDefinition } from "./runtimes/my-agent/definition.js";
-   import { MyRuntime } from "./runtimes/my-agent/runtime.js";
-   const registry = new RuntimeRegistry();
-   registry.register(myDefinition, () => new MyRuntime());
-   const runtime = await registry.resolve("my-agent");
-   ```
+ ```ts
+ import { RuntimeRegistry } from "agent-runtimes";
+ import { myDefinition } from "./runtimes/my-agent/definition.js";
+ import { MyRuntime } from "./runtimes/my-agent/runtime.js";
+ const registry = new RuntimeRegistry();
+ registry.register(myDefinition, () => new MyRuntime());
+ const runtime = await registry.resolve("my-agent");
+````
 
-   Then add the adapter to the `runtimes` facade in `src/runtimes.ts`
-   so `runtimes.resolve("my-agent")` works out of the box.
+Then add the adapter to the `runtimes` facade in `src/runtimes.ts`
+so `runtimes.resolve("my-agent")` works out of the box.
 
 7. **Tests**:
    - `tests/<id>.test.ts`: `buildArgs` cases + `fixtures/*.jsonl → Parser → RuntimeEvent[]` (cover `Dev_Docs:1049-1062`).
    - `tests/integration/<id>.test.ts`: `resolve → detect → spawn → events → done → cleanup` with real CLI (skip if not installed).
 
 8. **Docs**: update `docs/architecture.md` if new capability or transport is needed; otherwise no core changes.
+
+### Permission posture default
+
+Headless runs default to least privilege: no `bypassPermissions` unless the
+caller sets `workspace.permissionMode` (or the explicit dangerous alias
+`dangerouslySkipPermissions`). MCP sessions pre-approve exactly their own
+servers' tools instead of bypassing. This deliberately diverges from
+open-design, which hardcodes `--permission-mode bypassPermissions` for daemon
+runs — our callers opt into bypass explicitly rather than discovering it
+after a destructive turn. Interactive turns use `onPermissionRequest` +
+`permission_request` event + `respondToPermission` duplex and never stall.
 
 ## Checklist
 

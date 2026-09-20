@@ -49,9 +49,10 @@ describe("buildClaudeMcpConfig", () => {
   });
 
   it("derives scoped --allowedTools from servers", () => {
-    expect(
-      buildClaudeMcpAllowedTools([echoServer, { name: "gh", command: "x" }]),
-    ).toEqual(["mcp__echo__*", "mcp__gh__*"]);
+    expect(buildClaudeMcpAllowedTools([echoServer, { name: "gh", command: "x" }])).toEqual([
+      "mcp__echo__*",
+      "mcp__gh__*",
+    ]);
     const args = buildClaudeArgs({ allowedTools: ["mcp__echo__*", "mcp__gh__*"] });
     expect(args).toContain("--allowedTools");
     expect(args[args.indexOf("--allowedTools") + 1]).toBe("mcp__echo__* mcp__gh__*");

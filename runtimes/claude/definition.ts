@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { RuntimeDefinition } from "../../src/definition/index.js";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
 import type { McpServer } from "../../src/definition/mcp.js";
+import { sanitizeModelId } from "../../src/definition/model.js";
+import { RuntimeSessionError } from "../../src/core/errors.js";
 
 /**
  * Claude Code runtime definition — Phase 12
@@ -24,6 +26,11 @@ export const claudeDefinition: RuntimeDefinition = {
     // Tried in order when `claude` itself is not on PATH.
     aliases: ["openclaude"],
     versionArgs: ["--version"],
+    // Subcommand flags (`--add-dir`, `--include-partial-messages`) only
+    // appear under `claude -p --help`, never in the top-level help
+    // (open-design issue #430) — probe there for capability detection.
+    helpArgs: ["-p", "--help"],
+    registryId: "@anthropic-ai/claude-code",
   },
   input: {
     type: "stdin",
@@ -42,13 +49,28 @@ export const claudeDefinition: RuntimeDefinition = {
   session: {
     persistent: true,
   },
+  // Verified installs only (live runs + fixture provenance in comments).
+  versionPolicy: {
+    tested: ["2.1.112", "2.1.187"],
+  },
   models: {
     // NOTE: no listCommand — `claude` has no list-models subcommand
     // (`claude --models` is `unknown option`; the default `["models"]`
-    // would run the agent with "models" as the prompt). Fallback only.
+    // would run the agent with "models" as the prompt). Fallback only:
+    // `default` = CLI config (omitted from argv), the three stable aliases,
+    // plus full names that shipped (mirrors open-design's fallback list).
     fallbackModels: [
+      { id: "default", provider: "anthropic", name: "Default (CLI config)" },
       { id: "sonnet", provider: "anthropic", name: "Sonnet" },
       { id: "opus", provider: "anthropic", name: "Opus" },
+      { id: "haiku", provider: "anthropic", name: "Haiku" },
+      { id: "fable", provider: "anthropic", name: "Fable" },
+      { id: "claude-opus-5", provider: "anthropic", name: "claude-opus-5" },
+      { id: "claude-sonnet-5", provider: "anthropic", name: "claude-sonnet-5" },
+      { id: "claude-fable-5", provider: "anthropic", name: "claude-fable-5" },
+      { id: "claude-opus-4-5", provider: "anthropic", name: "claude-opus-4-5" },
+      { id: "claude-sonnet-4-5", provider: "anthropic", name: "claude-sonnet-4-5" },
+      { id: "claude-haiku-4-5", provider: "anthropic", name: "claude-haiku-4-5" },
     ],
   },
 };
@@ -96,8 +118,17 @@ export function buildClaudeArgs(options: ClaudeBuildArgsOptions = {}): string[] 
     "stream-json",
     "--verbose",
   ];
-  if (options.model) {
-    args.push("--model", options.model);
+  if (options.model !== undefined) {
+    // Model ids ride argv (`--model <id>`) — reject flag-shaped ids before
+    // the CLI can parse them as options. `default` means "CLI config" and
+    // omits the flag (daemon parity) instead of asking for a model named that.
+    const model = sanitizeModelId(options.model);
+    if (model === null) {
+      throw new RuntimeSessionError(`invalid claude model id: ${JSON.stringify(options.model)}`, {
+        runtime: "claude",
+      });
+    }
+    if (model !== "default") args.push("--model", model);
   }
   if (options.reasoning) {
     args.push("--effort", options.reasoning.effort);
@@ -160,8 +191,10 @@ export function buildClaudeStdinPrompt(
  * universally valid minimum.
  */
 export function buildClaudeMcpConfig(servers: McpServer[]): string {
-  const mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> =
-    {};
+  const mcpServers: Record<
+    string,
+    { command: string; args?: string[]; env?: Record<string, string> }
+  > = {};
   for (const s of servers) {
     const entry: { command: string; args?: string[]; env?: Record<string, string> } = {
       command: s.command,

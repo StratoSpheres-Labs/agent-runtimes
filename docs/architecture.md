@@ -12,19 +12,40 @@ Reference: `Dev_Docs/agent_runtimes_dev_plan.md` (phased plan), `Dev_Docs/backgr
   - `Session` spans multiple `Process`es (resume creates Process 2). Never model `Session` as `ChildProcess`.
   - `Runtime` owns discovery & session creation; `Session` owns multi-`Run` lifecycle; `Run` owns one `Transport→Parser→RuntimeEvent` pipeline.
 
-## Data Flow
+## Who Creates Whom
 
 ```
-Agent CLI
-  ↓  raw bytes
-Transport (StdioTransport → RuntimeProcess; AcpTransport → RuntimeProcess + JSON-RPC)  — Rule 3: never parse
-  ↓  Uint8Array chunks
-Parser (JsonlParser / OpencodeParser)       — Rule 4: never manage process; owns buffering for split JSON
-  ↓  RuntimeEvent
-Application
+Runtime  —— 找到 CLI，创建 Session（detect / createSession）
+  └─ Session —— 横跨多次进程，记住 agent 原生会话 id，创建 Run
+       └─ Run —— 一次进程：搬字节 → 翻事件 → 结束即 done
 ```
 
-Parser handles partial JSON across chunks, coalesced lines, illegal JSON, unknown types, and empty input.
+`Session !== Process`：续接（resume）就是开第 2 个进程、带上老会话 id；Session 本人从不等于某个子进程。
+
+## Data Flow (inside one Run)
+
+以 `session.run("你好")` 跑 codex 为例：
+
+```
+session.run("你好")
+  │ ① Session 拼好 argv（buildArgs 把 --json/--sandbox/-C 藏好），创建 Run
+  ▼
+Transport —— 只管搬字节，不认识 JSON（Rule 3）
+  │ spawn("codex", ["exec", "--json", …])，stdout 流出原始字节，
+  │ 而且可能半包：
+  │   chunk1: {"type":"thread.started","thread_id":"thr_
+  │   chunk2: abc"}\n{"type":"item.completed",…
+  ▼
+Parser —— 只管翻译，不认识进程（Rule 4）
+  │ 把字节攒成整行 JSON，再翻成统一事件：
+  │   { type: "session_started", sessionId: "thr_abc" }
+  │   { type: "text_delta", text: "…" }
+  ▼
+你的代码 —— 只看到 RuntimeEvent，看不到字节/JSONL/进程（Rule 6）
+  for await (const e of run.events()) …
+```
+
+分工的意义：输出乱了找 Parser（半包、拼行、非法 JSON、未知类型都是它扛），进程僵死了找 Transport/Lifecycle，两边互不背锅。
 
 ## Public API
 

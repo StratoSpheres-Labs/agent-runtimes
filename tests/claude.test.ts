@@ -39,7 +39,10 @@ describe("claude buildArgs", () => {
       "--dangerously-skip-permissions",
     );
     expect(buildClaudeArgs({})).not.toContain("--dangerously-skip-permissions");
-    const both = buildClaudeArgs({ permissionMode: "bypassPermissions", dangerouslySkipPermissions: true });
+    const both = buildClaudeArgs({
+      permissionMode: "bypassPermissions",
+      dangerouslySkipPermissions: true,
+    });
     expect(both).toContain("--permission-mode");
     expect(both).toContain("--dangerously-skip-permissions");
   });
@@ -70,6 +73,22 @@ describe("claude buildArgs", () => {
     expect(claudeDefinition.transport.type).toBe("stdio");
     expect(claudeDefinition.capabilities.streaming).toBe(true);
   });
+
+  it("fallback covers default alias, the three families, and shipped full names", () => {
+    const ids = (claudeDefinition.models?.fallbackModels ?? []).map((m) => m.id);
+    for (const id of [
+      "default",
+      "sonnet",
+      "opus",
+      "haiku",
+      "fable",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+    ]) {
+      expect(ids).toContain(id);
+    }
+  });
 });
 
 describe("ClaudeParser fixtures", () => {
@@ -86,6 +105,7 @@ describe("ClaudeParser fixtures", () => {
       for (const e of all) {
         expect([
           "text_delta",
+          "reasoning_delta",
           "tool_started",
           "tool_finished",
           "error",
@@ -104,6 +124,36 @@ describe("ClaudeParser fixtures", () => {
     const line = `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n`;
     const evs = p.parse(enc(line));
     expect(evs.some((e) => e.type === "text_delta")).toBe(true);
+  });
+
+  it("thinking block → reasoning_delta (documented stream-json shape)", () => {
+    // Shape per platform docs + issue #20127:
+    // {"type":"assistant","message":{"content":[{"type":"thinking",
+    //   "thinking":"...","signature":"..."}]}} — signature never forwarded.
+    const p = new ClaudeParser();
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "The user wants a number.", signature: "opaque" },
+          { type: "text", text: "391" },
+        ],
+      },
+    });
+    expect(p.parse(enc(line + "\n"))).toEqual([
+      { type: "reasoning_delta", text: "The user wants a number." },
+      { type: "text_delta", text: "391" },
+    ]);
+  });
+
+  it("empty thinking block is dropped, not errored (display: omitted)", () => {
+    const p = new ClaudeParser();
+    const line = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "thinking", thinking: "", signature: "opaque" }] },
+    });
+    expect(p.parse(enc(line + "\n"))).toEqual([]);
+    expect(p.flush()).toEqual([]);
   });
 
   it("tool_use → tool_started and tool_result → tool_finished", () => {
@@ -167,7 +217,13 @@ describe("ClaudeParser fixtures", () => {
             name: "AskUserQuestion",
             input: {
               questions: [
-                { question: "Allow edit?", options: [{ label: "Yes", kind: "allow_once" }, { label: "No", kind: "reject_once" }] },
+                {
+                  question: "Allow edit?",
+                  options: [
+                    { label: "Yes", kind: "allow_once" },
+                    { label: "No", kind: "reject_once" },
+                  ],
+                },
               ],
             },
           },
@@ -175,8 +231,33 @@ describe("ClaudeParser fixtures", () => {
       },
     });
     const evs = p.parse(enc(line + "\n"));
-    expect(evs[0]).toMatchObject({ type: "permission_request", id: "q1", toolName: "AskUserQuestion" });
-    expect((evs[0] as { options: Array<{ optionId: string }> }).options.map((o) => o.optionId)).toEqual(["Yes", "No"]);
+    expect(evs[0]).toMatchObject({
+      type: "permission_request",
+      id: "q1",
+      toolName: "AskUserQuestion",
+    });
+    expect(
+      (evs[0] as { options: Array<{ optionId: string }> }).options.map((o) => o.optionId),
+    ).toEqual(["Yes", "No"]);
+  });
+
+  it("ClaudeRun owns the permission envelope; core DefaultRun does not (Rule 6)", async () => {
+    const { ClaudeRun, buildClaudePermissionAnswer } = await import("../runtimes/claude/run.js");
+    const { DefaultRun } = await import("../src/core/run.js");
+    // Exact wire shape (verified live on 2.1.187).
+    expect(JSON.parse(buildClaudePermissionAnswer("q1", "Yes"))).toEqual({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "q1", content: "Yes" }],
+      },
+    });
+    expect(typeof new ClaudeRun("t:r", { command: process.execPath }).respondToPermission).toBe(
+      "function",
+    );
+    expect("respondToPermission" in new DefaultRun("t:r", { command: process.execPath })).toBe(
+      false,
+    );
   });
 
   it("AskUserQuestion without questions still yields permission_request with default option", () => {

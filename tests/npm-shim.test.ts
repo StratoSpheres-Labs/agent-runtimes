@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveShimTarget } from "../src/discovery/npm-shim.js";
+import { resolveLaunch } from "../src/discovery/launch.js";
 
 // Fixtures use join()-built (native-separator) paths and pass the platform
 // explicitly, so these tests are hermetic on every OS.
@@ -43,6 +44,44 @@ describe("resolveShimTarget", () => {
       const got = resolveShimTarget(shim, "win32");
       expect(got?.script).toBe(join(dir, scriptRel));
       expect(got?.env).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves native-binary shims to the exe (claude-code 2.1.276 shape)", () => {
+    // Verified live: pnpm's claude.CMD forwards to bin\claude.exe (224MB),
+    // no .js target anywhere. Previously resolved to null → CLI "not found".
+    if (process.platform !== "win32") return;
+    const dir = scratch();
+    try {
+      const exeRel = join("pkg", "bin", "tool.exe");
+      mkdirSync(join(dir, "pkg", "bin"), { recursive: true });
+      writeFileSync(join(dir, exeRel), "MZ-stub");
+      const shim = join(dir, "tool.cmd");
+      writeFileSync(shim, `@SETLOCAL\n@"%~dp0\\${exeRel}"   %*\n`);
+      const got = resolveShimTarget(shim, "win32");
+      expect(got?.binary).toBe(join(dir, exeRel));
+      expect(got?.script).toBeUndefined();
+      // Launch runs the binary directly — no host node, no prepended script.
+      expect(resolveLaunch(shim, "win32")).toEqual({ command: join(dir, exeRel), prependArgs: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the node script when a shim names both (historical shape wins)", () => {
+    if (process.platform !== "win32") return;
+    const dir = scratch();
+    try {
+      mkdirSync(join(dir, "pkg", "bin"), { recursive: true });
+      writeFileSync(join(dir, "pkg", "bin", "tool.js"), "// stub");
+      writeFileSync(join(dir, "pkg", "bin", "tool.exe"), "MZ-stub");
+      const shim = join(dir, "tool.cmd");
+      writeFileSync(shim, `node  "%~dp0\\pkg\\bin\\tool.js" %*\n@"%~dp0\\pkg\\bin\\tool.exe" %*\n`);
+      const got = resolveShimTarget(shim, "win32");
+      expect(got?.script).toBe(join(dir, "pkg", "bin", "tool.js"));
+      expect(got?.binary).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -8,14 +8,37 @@ export type { PromptInput } from "./definition/input.js";
 export type { TransportDefinition } from "./definition/transport.js";
 export type { RuntimeCapabilities } from "./definition/capability.js";
 export type { SessionDefinition } from "./definition/session.js";
-export type { RuntimeModel, ModelDefinition } from "./definition/model.js";
+export type { RuntimeModel, ModelDefinition, ModelReasoningOption } from "./definition/model.js";
+export type { VersionPolicy } from "./definition/version.js";
+export { sanitizeModelId } from "./definition/model.js";
 export type { ReasoningEffort, ReasoningOptions } from "./definition/reasoning.js";
-export type { McpServer } from "./definition/mcp.js";
+export type { McpServer, McpServerInfo } from "./definition/mcp.js";
+export type { RuntimeSkill } from "./definition/skill.js";
+export type { RuntimePlugin } from "./definition/plugin.js";
 export type { AuthMethod, AuthStatus } from "./definition/auth.js";
+export { stderrTail, withStderrTail } from "./definition/auth.js";
 export type { WorkspaceOptions } from "./definition/workspace.js";
-export type { PermissionHandler, PermissionRequest, PermissionResponse } from "./definition/permission.js";
+export type {
+  PermissionHandler,
+  PermissionRequest,
+  PermissionResponse,
+} from "./definition/permission.js";
 export type { ImageInput } from "./definition/image.js";
-export { saveSessionRecord, loadSessionRecord, listSessionRecords, deleteSessionRecord, getSessionStoreDir, setSessionStoreDir } from "./core/session-store.js";
+export {
+  truncateTranscriptText,
+  selectHistory,
+  toMs,
+  MAX_TRANSCRIPT_TEXT,
+} from "./definition/transcript.js";
+export type { HistoryOptions, TranscriptEntry } from "./definition/transcript.js";
+export {
+  saveSessionRecord,
+  loadSessionRecord,
+  listSessionRecords,
+  deleteSessionRecord,
+  getSessionStoreDir,
+  setSessionStoreDir,
+} from "./core/session-store.js";
 export type { SessionRecord } from "./core/session-store.js";
 
 // Core
@@ -29,8 +52,15 @@ export type {
 export { DefaultRuntime } from "./core/runtime.js";
 export { RuntimeRegistry, globalRegistry } from "./core/registry.js";
 export { runtimes } from "./runtimes.js";
-export { doctor, formatReport, doctorExitCode } from "./doctor.js";
-export type { DoctorCheck, DoctorReport, DoctorStatus } from "./doctor.js";
+export { doctor, formatReport, doctorExitCode, formatInstalls, summarizeModels } from "./doctor.js";
+export type { DoctorCheck, DoctorReport, DoctorStatus, DoctorReason } from "./doctor.js";
+export {
+  checkForUpdates,
+  clearLatestCache,
+  fetchLatestVersion,
+  updateAvailable,
+} from "./discovery/updates.js";
+export type { UpdateInfo } from "./discovery/updates.js";
 export {
   RuntimeError,
   RuntimeNotFoundError,
@@ -50,13 +80,22 @@ export { DefaultSession } from "./core/session.js";
 export type {
   DoneEvent,
   ErrorEvent,
+  JsonValue,
+  PermissionRequestEvent,
+  ReasoningDeltaEvent,
+  RunScoped,
   RuntimeEvent,
   SessionStartedEvent,
   TextDeltaEvent,
   ToolFinishedEvent,
   ToolStartedEvent,
+  UsageEvent,
 } from "./events/index.js";
-export { EventStream } from "./events/index.js";
+export { asJsonValue, EventStream } from "./events/index.js";
+
+// Frontend wire contract (JSON-only boundary: DTOs + NDJSON framing)
+export type { WireCreateSessionOptions } from "./wire.js";
+export { decodeRuntimeEventLine, encodeRuntimeEvent, isRuntimeEvent } from "./wire.js";
 
 // Transport / Parser
 export type { RuntimeTransport } from "./transport/transport.js";
@@ -71,12 +110,41 @@ export { AcpRun } from "./core/acp-run.js";
 export type { AcpRunOptions } from "./core/acp-run.js";
 
 // Discovery
-export { findExecutable } from "./discovery/executable.js";
+export { findExecutable, agentSearchDirs } from "./discovery/executable.js";
+export {
+  isExecutableFile,
+  rememberUnusableExecutable,
+  forgetUnusableExecutables,
+  resolveExtraProbePaths,
+} from "./discovery/executable.js";
+export { userToolchainBinDirs, toolchainProbePaths } from "./discovery/toolchain.js";
+export { resolveLaunch } from "./discovery/launch.js";
+export type { ResolvedLaunch } from "./discovery/launch.js";
 export { probeVersion } from "./discovery/version.js";
 export { probeHelpFlags, capabilitiesFromHelp } from "./discovery/capabilities.js";
 export { discoverModels } from "./discovery/models.js";
+export {
+  assertKnownModel,
+  clearLiveModels,
+  isKnownModel,
+  rememberLiveModels,
+} from "./discovery/models.js";
+export { discoverMcp, parseMcpList } from "./discovery/mcp.js";
+export { discoverSkills, parseSkillFrontmatter, skillSearchDirs } from "./discovery/skills.js";
+export type { SkillRoot, SkillSearchOptions } from "./discovery/skills.js";
+export {
+  discoverPlugins,
+  parsePluginEntries,
+  pluginConfigFiles,
+  pluginSearchDirs,
+  readPluginConfigFile,
+  stripJsoncComments,
+} from "./discovery/plugins.js";
+export type { PluginConfigFile, PluginDir, PluginSearchOptions } from "./discovery/plugins.js";
 export { runCommand } from "./discovery/run-command.js";
 export type { RunCommandOptions, RunCommandResult } from "./discovery/run-command.js";
+export { findAllInstalls, inferInstallManager } from "./discovery/installs.js";
+export type { InstallManager, InstallSearchOptions, InstalledCopy } from "./discovery/installs.js";
 export { resolveShimTarget } from "./discovery/npm-shim.js";
 export type { ShimLaunch } from "./discovery/npm-shim.js";
 
@@ -88,7 +156,7 @@ export {
   type OpencodeBuildArgsOptions,
 } from "../runtimes/opencode/definition.js";
 export { OpencodeParser } from "../runtimes/opencode/parser.js";
-export { OpencodeRuntime } from "../runtimes/opencode/runtime.js";
+export { OpencodeRuntime, readOpencodeAuthFile } from "../runtimes/opencode/runtime.js";
 export {
   claudeDefinition,
   buildClaudeArgs,
@@ -101,7 +169,12 @@ export { ClaudeRuntime } from "../runtimes/claude/runtime.js";
 export {
   codexDefinition,
   buildCodexArgs,
+  checkCodexModelSupport,
+  readCodexDefaultModel,
+  resolveCodexConfigPath,
   type CodexBuildArgsOptions,
+  type CodexDefaultModel,
+  type CodexModelSupport,
 } from "../runtimes/codex/definition.js";
 export { CodexParser } from "../runtimes/codex/parser.js";
 export { CodexRuntime } from "../runtimes/codex/runtime.js";

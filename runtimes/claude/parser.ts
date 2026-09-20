@@ -1,5 +1,6 @@
 import { JsonlParser } from "../../src/parser/jsonl.js";
 import type { RuntimeEvent } from "../../src/events/runtime-event.js";
+import { asJsonValue } from "../../src/events/runtime-event.js";
 import type { RuntimeParser } from "../../src/parser/parser.js";
 
 function asString(value: unknown): string | undefined {
@@ -11,6 +12,8 @@ function asString(value: unknown): string | undefined {
  * Converts `claude --output-format stream-json` JSONL into RuntimeEvent.
  * Handles claude's shapes (per open-design's claude-stream.ts):
  *  {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}} → text_delta
+ *  {"type":"assistant","message":{"content":[{"type":"thinking",
+ *    "thinking":"..."}]}} → reasoning_delta (empty → dropped)
  *  {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"...","input":{}}]}} → tool_started
  *  {"type":"tool_result","tool_use_id":"...","content":"..."} → tool_finished
  *  {"type":"user","message":{"content":[{"type":"tool_result",...}]}} → tool_finished
@@ -85,15 +88,29 @@ export class ClaudeParser implements RuntimeParser {
             const b = block as Record<string, unknown>;
             if (b["type"] === "text" && typeof b["text"] === "string") {
               events.push({ type: "text_delta", text: b["text"] });
+            } else if (b["type"] === "thinking") {
+              // Summarized reasoning (`thinking` field; `signature` stays
+              // opaque — never forwarded, it is resume machinery, not text).
+              // Empty when the model keeps thinking private (`display:
+              // omitted`) — a valid envelope, dropped rather than errored.
+              const thinking = asString(b["thinking"]) ?? asString(b["text"]) ?? "";
+              if (thinking) events.push({ type: "reasoning_delta", text: thinking });
             } else if (b["type"] === "tool_use") {
               const name = asString(b["name"]) ?? "tool";
               const id = asString(b["id"]) ?? "tool_0";
               if (name === "AskUserQuestion") {
                 const input = b["input"] as Record<string, unknown> | undefined;
-                const questions = input !== undefined && Array.isArray(input["questions"]) ? input["questions"] : [];
+                const questions =
+                  input !== undefined && Array.isArray(input["questions"])
+                    ? input["questions"]
+                    : [];
                 const first = questions[0] as Record<string, unknown> | undefined;
-                const prompt = first !== undefined && typeof first["question"] === "string" ? first["question"] : undefined;
-                const rawOpts = first !== undefined && Array.isArray(first["options"]) ? first["options"] : [];
+                const prompt =
+                  first !== undefined && typeof first["question"] === "string"
+                    ? first["question"]
+                    : undefined;
+                const rawOpts =
+                  first !== undefined && Array.isArray(first["options"]) ? first["options"] : [];
                 const options = rawOpts
                   .filter((o): o is Record<string, unknown> => typeof o === "object" && o !== null)
                   .map((o) => ({
@@ -106,20 +123,21 @@ export class ClaudeParser implements RuntimeParser {
                   id,
                   toolName: name,
                   prompt,
-                  options: options.length > 0 ? options : [{ optionId: "allow", kind: "allow_once" }],
-                  raw: b["input"],
+                  options:
+                    options.length > 0 ? options : [{ optionId: "allow", kind: "allow_once" }],
+                  raw: asJsonValue(b["input"]),
                 });
               } else {
                 events.push({
                   type: "tool_started",
                   id,
                   name,
-                  input: b["input"],
+                  input: asJsonValue(b["input"]),
                 });
               }
             }
-            // Other block types (e.g. thinking) have no v0.1 event — dropped,
-            // not errored: the envelope itself was valid.
+            // Other block types have no event — dropped, not errored: the
+            // envelope itself was valid.
           }
         }
         return events;
@@ -129,7 +147,7 @@ export class ClaudeParser implements RuntimeParser {
           {
             type: "tool_finished",
             id: asString(rec["tool_use_id"]) ?? asString(rec["id"]) ?? "tool_0",
-            output: rec["content"],
+            output: asJsonValue(rec["content"]),
           },
         ];
       }
@@ -146,7 +164,7 @@ export class ClaudeParser implements RuntimeParser {
               events.push({
                 type: "tool_finished",
                 id: asString(b["tool_use_id"]) ?? "tool_0",
-                output: b["content"],
+                output: asJsonValue(b["content"]),
                 ...(b["is_error"] === true ? { error: true as const } : {}),
               });
             }
@@ -170,12 +188,19 @@ export class ClaudeParser implements RuntimeParser {
           if (usage !== undefined || cost !== undefined) {
             events.push({
               type: "usage",
-              inputTokens: typeof usage?.["input_tokens"] === "number" ? usage["input_tokens"] : undefined,
-              outputTokens: typeof usage?.["output_tokens"] === "number" ? usage["output_tokens"] : undefined,
-              cacheTokens: typeof usage?.["cache_read_input_tokens"] === "number" ? usage["cache_read_input_tokens"] : typeof usage?.["cache_creation_input_tokens"] === "number" ? usage["cache_creation_input_tokens"] : undefined,
+              inputTokens:
+                typeof usage?.["input_tokens"] === "number" ? usage["input_tokens"] : undefined,
+              outputTokens:
+                typeof usage?.["output_tokens"] === "number" ? usage["output_tokens"] : undefined,
+              cacheTokens:
+                typeof usage?.["cache_read_input_tokens"] === "number"
+                  ? usage["cache_read_input_tokens"]
+                  : typeof usage?.["cache_creation_input_tokens"] === "number"
+                    ? usage["cache_creation_input_tokens"]
+                    : undefined,
               costUsd: cost,
               model: asString(rec["model"]),
-              raw: rec,
+              raw: asJsonValue(rec),
             });
           }
           events.push({ type: "done" });

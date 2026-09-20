@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { OpencodeParser } from "../../runtimes/opencode/parser.js";
 import { buildOpencodeArgs } from "../../runtimes/opencode/definition.js";
 import { findExecutable } from "../../src/discovery/executable.js";
+import { resolveLaunch } from "../../src/discovery/launch.js";
 
 /**
  * Phase 11 — real opencode CLI integration
@@ -25,12 +26,16 @@ describe("integration: opencode", () => {
 
     const args = buildOpencodeArgs({ format: "json" });
     // Add prompt as argv for simplicity (input via stdin also works)
-    // We use `opencode run --format json` with prompt "hi" as positional
-    const fullArgs = [...args, "hi"];
-    const child = spawn(exe, fullArgs, {
+    // We use `opencode run --format json` with prompt "hi" as positional.
+    // Spawn through resolveLaunch like every real consumer: `exe` may be a
+    // win32 shim path that CreateProcess cannot execute directly.
+    const launch = resolveLaunch(exe);
+    const fullArgs = [...launch.prependArgs, ...args, "hi"];
+    const child = spawn(launch.command, fullArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      env: launch.env ?? process.env,
     });
 
     // Close stdin immediately — no extra prompt
@@ -66,7 +71,8 @@ describe("integration: opencode", () => {
       child.on("error", () => {
         resolve(null);
       });
-      // Timeout after 30s to avoid hanging CI
+      // Timeout to avoid hanging CI — generous: live model turns swing
+      // 15s–35s+ with network variance (observed), the kill is a backstop.
       setTimeout(() => {
         try {
           child.kill("SIGTERM");
@@ -74,7 +80,7 @@ describe("integration: opencode", () => {
           // ignore
         }
         resolve(null);
-      }, 30_000);
+      }, 60_000);
     });
 
     await stdoutPromise;
@@ -103,5 +109,5 @@ describe("integration: opencode", () => {
 
     // Cleanup check: ensure child is closed
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-  }, 35_000);
+  }, 70_000);
 });

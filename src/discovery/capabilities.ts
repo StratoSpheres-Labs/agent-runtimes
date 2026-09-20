@@ -1,4 +1,5 @@
 import { runCommand } from "./run-command.js";
+import { resolveLaunch } from "./launch.js";
 import type { RuntimeCapabilities } from "../definition/capability.js";
 
 /**
@@ -21,7 +22,15 @@ export async function probeHelpFlags(
 }
 
 async function getHelpText(command: string, helpArgs: string[]): Promise<string> {
-  const res = await runCommand({ command, args: helpArgs });
+  // Shim-aware like every other probe (Rule 7): a win32 `.cmd` path cannot
+  // spawn directly with shell:false, so resolve to the node script or the
+  // native binary first. Bare names pass through untouched.
+  const launch = resolveLaunch(command);
+  const res = await runCommand({
+    command: launch.command,
+    args: [...launch.prependArgs, ...helpArgs],
+    env: launch.env,
+  });
   // On timeout the output may be partial — treat as no data so capability
   // gating fails safe (omits flags) instead of acting on truncated help.
   if (res.timedOut) return "";

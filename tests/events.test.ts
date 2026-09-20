@@ -62,6 +62,40 @@ describe("AgentRun.events()", () => {
     expect(_s.id).toBeDefined();
   });
 
+  it("stamps every event with the run id", async () => {
+    const { DefaultRun } = await import("../src/core/run.js");
+    const run = new DefaultRun("sess_abc:run3", {
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('hi'); process.exit(1)"],
+    });
+    run.spawn();
+    const events: RuntimeEvent[] = [];
+    for await (const ev of run.events()) {
+      events.push(ev);
+    }
+    expect(events.length).toBeGreaterThan(0);
+    for (const e of events) expect(e.runId).toBe("sess_abc:run3");
+  });
+
+  it("cancel ends the stream with a terminal done carrying the signal", async () => {
+    const { DefaultRun } = await import("../src/core/run.js");
+    const run = new DefaultRun("test:cancel-done", {
+      command: process.execPath,
+      args: ["-e", "setInterval(()=>{}, 1000)"],
+    });
+    run.spawn();
+    await run.cancel();
+    const events: RuntimeEvent[] = [];
+    for await (const ev of run.events()) {
+      events.push(ev);
+    }
+    const last = events[events.length - 1];
+    expect(last?.type).toBe("done");
+    expect(last).toMatchObject({ runId: "test:cancel-done", signal: "SIGTERM" });
+    // Exactly one done — the exit handler must not double-emit after cancel.
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+  });
+
   it("error + done on non-zero exit", async () => {
     const { DefaultRun } = await import("../src/core/run.js");
     const run = new DefaultRun("test:error", {

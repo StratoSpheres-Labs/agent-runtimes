@@ -1,4 +1,5 @@
 import type { RuntimeEvent } from "../events/runtime-event.js";
+import { asJsonValue } from "../events/runtime-event.js";
 import type { RuntimeParser } from "./parser.js";
 
 function asString(value: unknown): string | undefined {
@@ -20,7 +21,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  *
  * Verified live against opencode 1.18.27 `acp`:
  * - agent_message_chunk {content:{type:"text",text}}       → text_delta
- * - agent_thought_chunk                                    → dropped (no thinking event in v0.1)
+ * - agent_thought_chunk {content:{type:"text",text}}       → reasoning_delta
+ *   (empty/missing text → dropped: valid envelope, nothing displayable)
  * - tool_call {toolCallId,title?,kind?,rawInput?}          → tool_started
  * - tool_call_update completed {…,content?,rawOutput?}     → tool_finished
  * - tool_call_update in_progress                            → dropped
@@ -95,7 +97,12 @@ export class AcpParser implements RuntimeParser {
         return [{ type: "text_delta", text }];
       }
       case "agent_thought_chunk": {
-        return [];
+        // Thinking summary (may be absent/empty when the model keeps its
+        // reasoning private) — display-only, never mixed into text_delta.
+        const content = asRecord(update?.["content"]);
+        const text = asString(content?.["text"]);
+        if (!text) return [];
+        return [{ type: "reasoning_delta", text }];
       }
       case "tool_call": {
         return [
@@ -103,7 +110,7 @@ export class AcpParser implements RuntimeParser {
             type: "tool_started",
             id: asString(update?.["toolCallId"]) ?? "tool_0",
             name: asString(update?.["title"]) ?? asString(update?.["kind"]) ?? "tool",
-            input: update?.["rawInput"],
+            input: asJsonValue(update?.["rawInput"]),
           },
         ];
       }
@@ -114,7 +121,7 @@ export class AcpParser implements RuntimeParser {
           {
             type: "tool_finished",
             id: asString(update?.["toolCallId"]) ?? "tool_0",
-            output: update?.["rawOutput"] ?? update?.["content"],
+            output: asJsonValue(update?.["rawOutput"] ?? update?.["content"]),
             error: status === "failed",
           },
         ];
@@ -123,12 +130,20 @@ export class AcpParser implements RuntimeParser {
         return [
           {
             type: "usage",
-            inputTokens: typeof update?.["inputTokens"] === "number" ? update["inputTokens"] : undefined,
-            outputTokens: typeof update?.["outputTokens"] === "number" ? update["outputTokens"] : undefined,
-            cacheTokens: typeof update?.["cacheTokens"] === "number" ? update["cacheTokens"] : undefined,
-            costUsd: typeof update?.["cost"] === "number" ? update["cost"] : typeof update?.["costUsd"] === "number" ? update["costUsd"] : undefined,
+            inputTokens:
+              typeof update?.["inputTokens"] === "number" ? update["inputTokens"] : undefined,
+            outputTokens:
+              typeof update?.["outputTokens"] === "number" ? update["outputTokens"] : undefined,
+            cacheTokens:
+              typeof update?.["cacheTokens"] === "number" ? update["cacheTokens"] : undefined,
+            costUsd:
+              typeof update?.["cost"] === "number"
+                ? update["cost"]
+                : typeof update?.["costUsd"] === "number"
+                  ? update["costUsd"]
+                  : undefined,
             model: asString(update?.["model"]),
-            raw: update,
+            raw: asJsonValue(update),
           },
         ];
       }

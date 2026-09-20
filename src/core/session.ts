@@ -1,6 +1,8 @@
 import { RuntimeSessionError } from "./errors.js";
 import { DefaultRun, type AgentRun } from "./run.js";
 import type { ImageInput } from "../definition/image.js";
+import type { McpServer } from "../definition/mcp.js";
+import type { HistoryOptions, TranscriptEntry } from "../definition/transcript.js";
 import { assertPromptWithinHardBudget } from "../definition/prompt.js";
 
 /**
@@ -10,9 +12,23 @@ import { assertPromptWithinHardBudget } from "../definition/prompt.js";
 
 export interface AgentSession {
   readonly id: string;
+  /** Phase 33: servers attached to this session (what was passed at createSession). */
+  readonly mcpServers?: McpServer[];
+  /**
+   * Start one turn. At most one Run is active per session: a second `run()`
+   * while the previous one is still going rejects with
+   * `RuntimeSessionError` (never silently cancels it) — await the first
+   * run's `result()` or `cancel()` it explicitly, then call again.
+   */
   run(prompt: string, options?: SessionRunOptions): Promise<AgentRun>;
   cancel(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * Compact conversation history (read-only, never persisted by the
+   * library). Optional: sessions without a transcript store return [].
+   * Entries may contain user-pasted secrets — never log them blindly.
+   */
+  history?(options?: HistoryOptions): Promise<TranscriptEntry[]>;
   /** Phase 15: resume this session (no-op for core stub, adapter overrides) */
   resume(): Promise<void>;
 }
@@ -46,6 +62,7 @@ function generateId(): string {
 
 export class DefaultSession implements AgentSession {
   public readonly id: string;
+  public readonly mcpServers?: McpServer[];
   private readonly cwd: string | undefined;
   private readonly env: Record<string, string | undefined> | undefined;
   private readonly runFactory: SessionOptions["runFactory"];
@@ -54,8 +71,9 @@ export class DefaultSession implements AgentSession {
   private closed = false;
   private runCounter = 0;
 
-  public constructor(options: SessionOptions = {}) {
+  public constructor(options: SessionOptions & { mcpServers?: McpServer[] } = {}) {
     this.id = options.id ?? generateId();
+    this.mcpServers = options.mcpServers;
     this.cwd = options.cwd;
     this.env = options.env;
     this.runFactory = options.runFactory;
@@ -66,9 +84,14 @@ export class DefaultSession implements AgentSession {
       throw new RuntimeSessionError(`Session ${this.id} is closed`);
     }
     assertPromptWithinHardBudget(prompt);
-    // Cancel previous run if still active — one active Run at a time for v0.1
+    // One active Run at a time: never silently cancel the previous one —
+    // reject loudly so no turn is lost without the caller knowing.
     if (this.currentRun && !this.currentRun.done) {
-      await this.currentRun.cancel();
+      throw new RuntimeSessionError(
+        `Session ${this.id} already has an active run (${this.currentRun.id}) — ` +
+          `await its result() or cancel() it before starting another`,
+        { runtime: "session" },
+      );
     }
 
     const runId = `${this.id}:run${String(++this.runCounter)}`;
@@ -101,6 +124,11 @@ export class DefaultSession implements AgentSession {
     this.currentRun = run;
     this.runs.push(run);
     return run;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  public async history(): Promise<TranscriptEntry[]> {
+    return [];
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

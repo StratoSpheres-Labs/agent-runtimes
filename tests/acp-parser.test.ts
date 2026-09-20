@@ -20,6 +20,7 @@ describe("AcpParser fixtures", () => {
     const b = p.parse(enc(raw.slice(mid)));
     const all = [...a, ...b, ...p.flush()];
     expect(all.map((e) => e.type)).toEqual([
+      "reasoning_delta",
       "text_delta",
       "text_delta",
       "tool_started",
@@ -30,6 +31,10 @@ describe("AcpParser fixtures", () => {
       .filter((e) => e.type === "text_delta")
       .map((e) => (e as { text: string }).text);
     expect(texts).toEqual(["hello", " world"]);
+    const thoughts = all
+      .filter((e) => e.type === "reasoning_delta")
+      .map((e) => (e as { text: string }).text);
+    expect(thoughts).toEqual(["planning"]);
     expect(all.some((e) => e.type === "error")).toBe(false);
     expect(all.some((e) => e.type === "done")).toBe(false);
   });
@@ -47,7 +52,7 @@ describe("AcpParser mapping", () => {
     expect(p.flush()).toEqual([]);
   });
 
-  it("drops thought/unknown updates without error spam but emits usage", () => {
+  it("maps thought chunks to reasoning_delta; unknown kinds stay silent", () => {
     const p = new AcpParser();
     const evs = p.parse(
       enc(
@@ -58,9 +63,22 @@ describe("AcpParser mapping", () => {
     );
     const flushed = p.flush();
     const all = [...evs, ...flushed];
+    expect(all.filter((e) => e.type === "reasoning_delta")).toEqual([
+      { type: "reasoning_delta", text: "hmm" },
+    ]);
     expect(all.filter((e) => e.type === "usage").length).toBe(1);
     expect(all.filter((e) => e.type === "error").length).toBe(0);
     expect(all.filter((e) => e.type === "usage")[0]).toMatchObject({ type: "usage" });
+  });
+
+  it("drops empty thought chunks without error spam", () => {
+    const p = new AcpParser();
+    const evs = p.parse(
+      enc(
+        `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":""}}}}\n`,
+      ),
+    );
+    expect([...evs, ...p.flush()]).toEqual([]);
   });
 
   it("maps in-progress tool updates to nothing and failed ones to errored finish", () => {
@@ -81,5 +99,24 @@ describe("AcpParser mapping", () => {
     const evs = p.parse(enc("not json{{{\n"));
     expect(evs[0]?.type).toBe("error");
     expect(p.flush()).toEqual([]);
+  });
+
+  it("leaves runId unset — stamping is the Run's job", () => {
+    const p = new AcpParser();
+    const evs = p.parse(
+      line({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "s",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "hi" },
+          },
+        },
+      }),
+    );
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) expect(e.runId).toBeUndefined();
   });
 });

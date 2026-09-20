@@ -47,7 +47,11 @@ export function imageToBase64(img: ImageInput, cwd?: string): { base64: string; 
   throw new Error("ImageInput requires either path or data");
 }
 
-export function stageImageToTempFile(img: ImageInput, cwd: string | undefined, hint = "img"): string {
+export function stageImageToTempFile(
+  img: ImageInput,
+  cwd: string | undefined,
+  hint = "img",
+): string {
   if (img.path !== undefined) {
     const abs = isAbsolute(img.path) ? img.path : resolve(cwd ?? process.cwd(), img.path);
     if (!existsSync(abs)) throw new Error(`Image file not found: ${abs}`);
@@ -56,10 +60,19 @@ export function stageImageToTempFile(img: ImageInput, cwd: string | undefined, h
   if (img.data !== undefined) {
     const mime = img.mimeType ?? "image/png";
     const ext =
-      mime === "image/jpeg" ? ".jpg" : mime === "image/webp" ? ".webp" : mime === "image/gif" ? ".gif" : ".png";
-    const name = img.filename ?? `agent-runtimes-img-${hint}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}${ext}`;
+      mime === "image/jpeg"
+        ? ".jpg"
+        : mime === "image/webp"
+          ? ".webp"
+          : mime === "image/gif"
+            ? ".gif"
+            : ".png";
+    const name =
+      img.filename ??
+      `agent-runtimes-img-${hint}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}${ext}`;
     const file = join(tmpdir(), name);
-    const bytes = typeof img.data === "string" ? Buffer.from(img.data, "base64") : Buffer.from(img.data);
+    const bytes =
+      typeof img.data === "string" ? Buffer.from(img.data, "base64") : Buffer.from(img.data);
     writeFileSync(file, bytes);
     return file;
   }

@@ -4,7 +4,8 @@ import {
   type AgentSession,
   type SessionRunOptions,
 } from "../../src/core/session.js";
-import { DefaultRun, type AgentRun } from "../../src/core/run.js";
+import { type AgentRun } from "../../src/core/run.js";
+import { ClaudeRun } from "./run.js";
 import {
   buildClaudeArgs,
   buildClaudeMcpAllowedTools,
@@ -18,8 +19,12 @@ import type { McpServer } from "../../src/definition/mcp.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { normalizeWorkspaceAllowedPaths } from "../../src/definition/workspace.js";
 import type { PermissionHandler } from "../../src/definition/permission.js";
+import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
+import { readClaudeTranscript } from "./transcript.js";
 import { imageToBase64 } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { buildAgentEnv } from "../../src/discovery/env.js";
+import { resolveLaunch } from "../../src/discovery/launch.js";
 
 /**
  * Claude session with resume 鈥?mirrors OpencodeSession (Phase 15).
@@ -35,7 +40,7 @@ export class ClaudeSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly model: string | undefined;
   private readonly reasoning: ReasoningOptions | undefined;
-  private readonly mcpServers: McpServer[] | undefined;
+  public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly onPermissionRequest: PermissionHandler | undefined;
   private mcpConfigFile: string | null = null;
@@ -87,10 +92,15 @@ export class ClaudeSession implements AgentSession {
     const args = this.claudeSessionId
       ? buildClaudeArgs({ ...base, resumeId: this.claudeSessionId })
       : buildClaudeArgs(base);
-    const run = new DefaultRun(runId, {
-      command: this.command || claudeDefinition.executable.command,
-      args,
+    // Shim-aware spawn (win32 npm `.cmd` needs host node); native binaries
+    // pass through untouched. Full agent-env hardening (backfills, toolchain
+    // PATH, proxy normalization) like every other adapter.
+    const launch = resolveLaunch(this.command || claudeDefinition.executable.command);
+    const run = new ClaudeRun(runId, {
+      command: launch.command,
+      args: [...launch.prependArgs, ...args],
       cwd: this.cwd,
+      env: buildAgentEnv("claude", launch.env ?? process.env),
       stdinData: buildClaudeStdinPrompt(prompt, images),
       timeout: runOpts.timeout,
       parser: new ClaudeParser(),
@@ -114,10 +124,18 @@ export class ClaudeSession implements AgentSession {
                 model: self.model,
                 updatedAt: Date.now(),
               });
-            } catch (_e: unknown) { String(_e); }
+            } catch (_e: unknown) {
+              String(_e);
+            }
           }
           if (e.type === "permission_request" && self.onPermissionRequest) {
-            const req = e as { id: string; toolName?: string; prompt?: string; options: Array<{ optionId: string; kind: string; label?: string }>; raw?: unknown };
+            const req = e as {
+              id: string;
+              toolName?: string;
+              prompt?: string;
+              options: Array<{ optionId: string; kind: string; label?: string }>;
+              raw?: unknown;
+            };
             try {
               const ans = await self.onPermissionRequest({
                 method: "AskUserQuestion",
@@ -130,7 +148,9 @@ export class ClaudeSession implements AgentSession {
               if (run.respondToPermission !== undefined) {
                 await run.respondToPermission(req.id, ans.optionId);
               }
-            } catch (_e: unknown) { String(_e); }
+            } catch (_e: unknown) {
+              String(_e);
+            }
           }
           yield e;
         }
@@ -153,6 +173,12 @@ export class ClaudeSession implements AgentSession {
 
   public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
     return this.inner.run(prompt, options);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  public async history(options?: HistoryOptions): Promise<TranscriptEntry[]> {
+    if (!this.claudeSessionId) return [];
+    return readClaudeTranscript({ sessionId: this.claudeSessionId, cwd: this.cwd, ...options });
   }
 
   public async resume(): Promise<void> {
@@ -182,11 +208,3 @@ export class ClaudeSession implements AgentSession {
     return this.claudeSessionId;
   }
 }
-
-
-
-
-
-
-
-

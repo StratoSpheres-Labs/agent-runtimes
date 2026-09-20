@@ -10,11 +10,19 @@ export type { TransportDefinition } from "./transport.js";
 export type { RuntimeCapabilities } from "./capability.js";
 export type { SessionDefinition } from "./session.js";
 export type { RuntimeModel, ModelDefinition } from "./model.js";
+export type { VersionPolicy } from "./version.js";
 export type { ReasoningEffort, ReasoningOptions } from "./reasoning.js";
-export type { McpServer } from "./mcp.js";
+export type { McpServer, McpServerInfo } from "./mcp.js";
+export type { RuntimeSkill } from "./skill.js";
+export type { RuntimePlugin } from "./plugin.js";
 export type { AuthMethod, AuthStatus } from "./auth.js";
 export type { WorkspaceOptions } from "./workspace.js";
-export type { PermissionHandler, PermissionRequest, PermissionResponse, PermissionOption } from "./permission.js";
+export type {
+  PermissionHandler,
+  PermissionRequest,
+  PermissionResponse,
+  PermissionOption,
+} from "./permission.js";
 export type { ImageInput } from "./image.js";
 
 import type { RuntimeIdentity } from "./identity.js";
@@ -24,6 +32,7 @@ import type { TransportDefinition } from "./transport.js";
 import type { RuntimeCapabilities } from "./capability.js";
 import type { SessionDefinition } from "./session.js";
 import type { ModelDefinition } from "./model.js";
+import type { VersionPolicy } from "./version.js";
 
 /**
  * Complete runtime definition — what an adapter must provide.
@@ -38,4 +47,6 @@ export interface RuntimeDefinition {
   capabilities: RuntimeCapabilities;
   session: SessionDefinition;
   models?: ModelDefinition;
+  /** Tested/minimum CLI versions — drives the doctor `untested-version` warning. */
+  versionPolicy?: VersionPolicy;
 }

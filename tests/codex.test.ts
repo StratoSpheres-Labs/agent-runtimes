@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import {
   buildCodexArgs,
   codexDefinition,
   resolveCodexLaunch,
+  resolveCodexSandboxMode,
 } from "../runtimes/codex/definition.js";
 import { CodexParser } from "../runtimes/codex/parser.js";
 
@@ -13,17 +14,62 @@ function enc(s: string): Uint8Array {
   return new TextEncoder().encode(s);
 }
 
-describe("codex buildArgs", () => {
-  it("new session minimal", () => {
-    expect(buildCodexArgs()).toEqual(["exec", "--json", "--skip-git-repo-check"]);
+describe("codex sandbox default (daemon parity)", () => {
+  it("explicit mode always wins", () => {
+    expect(resolveCodexSandboxMode("read-only", "win32", {})).toBe("read-only");
+    expect(resolveCodexSandboxMode("read-only", "linux", {})).toBe("read-only");
   });
 
-  it("resume uses exec resume with thread_id", () => {
+  it("win32/WSL default to danger-full-access, POSIX to workspace-write", () => {
+    expect(resolveCodexSandboxMode(undefined, "win32", {})).toBe("danger-full-access");
+    expect(resolveCodexSandboxMode(undefined, "linux", {})).toBe("workspace-write");
+    expect(resolveCodexSandboxMode(undefined, "darwin", {})).toBe("workspace-write");
+    expect(resolveCodexSandboxMode(undefined, "linux", { WSL_DISTRO_NAME: "Ubuntu" })).toBe(
+      "danger-full-access",
+    );
+  });
+
+  it("OD_CODEX_SANDBOX env overrides the platform default", () => {
+    expect(
+      resolveCodexSandboxMode(undefined, "linux", { OD_CODEX_SANDBOX: "danger-full-access" }),
+    ).toBe("danger-full-access");
+  });
+});
+
+describe("codex buildArgs", () => {
+  it("new session pins sandbox default + cwd, workspace-write gains network access", () => {
+    expect(buildCodexArgs({ sandboxMode: "read-only", cwd: "/proj" })).toEqual([
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-C",
+      "/proj",
+    ]);
+    expect(buildCodexArgs({ sandboxMode: "workspace-write" })).toEqual([
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+    ]);
+  });
+
+  it("resume uses exec resume with thread_id (sandbox default resolved per platform)", () => {
+    const sandbox = resolveCodexSandboxMode(undefined);
+    const network =
+      sandbox === "workspace-write" ? ["-c", "sandbox_workspace_write.network_access=true"] : [];
     expect(buildCodexArgs({ resumeThreadId: "thr_123" })).toEqual([
       "exec",
       "resume",
       "--json",
       "--skip-git-repo-check",
+      "-c",
+      `sandbox_mode="${sandbox}"`,
+      ...network,
       "thr_123",
     ]);
   });
@@ -37,26 +83,38 @@ describe("codex buildArgs", () => {
       "o4-mini",
       "--sandbox",
       "workspace-write",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
     ]);
   });
 
   it("reasoning.effort maps to quoted -c model_reasoning_effort", () => {
     // Quoted: `-c` takes TOML, and a bare word is not a valid TOML string.
-    expect(buildCodexArgs({ reasoning: { effort: "high" } })).toEqual([
+    expect(buildCodexArgs({ reasoning: { effort: "high" }, sandboxMode: "read-only" })).toEqual([
       "exec",
       "--json",
       "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
       "-c",
       'model_reasoning_effort="high"',
     ]);
   });
 
   it("reasoning applies to the resume branch too, thread id last", () => {
-    expect(buildCodexArgs({ resumeThreadId: "thr_123", reasoning: { effort: "low" } })).toEqual([
+    expect(
+      buildCodexArgs({
+        resumeThreadId: "thr_123",
+        reasoning: { effort: "low" },
+        sandboxMode: "read-only",
+      }),
+    ).toEqual([
       "exec",
       "resume",
       "--json",
       "--skip-git-repo-check",
+      "-c",
+      'sandbox_mode="read-only"',
       "-c",
       'model_reasoning_effort="low"',
       "thr_123",
@@ -72,9 +130,64 @@ describe("codex buildArgs", () => {
       "--skip-git-repo-check",
       "-c",
       'sandbox_mode="workspace-write"',
+      "-c",
+      "sandbox_workspace_write.network_access=true",
       "thr_123",
     ]);
     expect(args).not.toContain("--sandbox");
+  });
+
+  it("resume never carries -C (rejected by exec resume)", () => {
+    const args = buildCodexArgs({ resumeThreadId: "thr_123", cwd: "/proj", addDirs: ["/x"] });
+    expect(args).not.toContain("-C");
+  });
+
+  it("serviceTier maps to quoted -c on both branches, default omits", () => {
+    expect(buildCodexArgs({ serviceTier: "priority", sandboxMode: "read-only" })).toEqual([
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      'service_tier="priority"',
+    ]);
+    expect(
+      buildCodexArgs({
+        serviceTier: "priority",
+        resumeThreadId: "thr_123",
+        sandboxMode: "read-only",
+      }),
+    ).toEqual([
+      "exec",
+      "resume",
+      "--json",
+      "--skip-git-repo-check",
+      "-c",
+      'sandbox_mode="read-only"',
+      "-c",
+      'service_tier="priority"',
+      "thr_123",
+    ]);
+    expect(buildCodexArgs({ serviceTier: "default", sandboxMode: "read-only" })).not.toContain(
+      "service_tier",
+    );
+  });
+
+  it("disablePlugins adds --disable plugins via option or env", () => {
+    const args = buildCodexArgs({ disablePlugins: true, sandboxMode: "read-only" });
+    expect(args).toContain("--disable");
+    expect(args).toContain("plugins");
+    expect(buildCodexArgs({ sandboxMode: "read-only" })).not.toContain("--disable");
+  });
+
+  it("OD_CODEX_DISABLE_PLUGINS=1 triggers plugin disable without the option", () => {
+    vi.stubEnv("OD_CODEX_DISABLE_PLUGINS", "1");
+    try {
+      expect(buildCodexArgs({ sandboxMode: "read-only" })).toContain("--disable");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("definition is stdin + stdio + streaming", () => {
@@ -98,6 +211,7 @@ describe("CodexParser fixtures", () => {
       for (const e of all) {
         expect([
           "text_delta",
+          "reasoning_delta",
           "tool_started",
           "tool_finished",
           "error",
@@ -135,6 +249,23 @@ describe("CodexParser fixtures", () => {
     const a = p.parse(enc(line.slice(0, mid)));
     const b = p.parse(enc(line.slice(mid)));
     expect([...a, ...b, ...p.flush()]).toEqual([]);
+  });
+
+  it("reasoning item.completed → reasoning_delta (never tool events)", () => {
+    // Shape per codex exec_events.rs: ReasoningItem { text } on completed.
+    // Previously this surfaced as tool_started/tool_finished named
+    // "reasoning" — thinking misfiled as tool calls.
+    const p = new CodexParser();
+    const line = `{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Reviewing** the plan"}}\n`;
+    const evs = [...p.parse(enc(line)), ...p.flush()];
+    expect(evs).toEqual([{ type: "reasoning_delta", text: "**Reviewing** the plan" }]);
+  });
+
+  it("reasoning item.started is ignored; empty reasoning is dropped", () => {
+    const p = new CodexParser();
+    const started = `{"type":"item.started","item":{"id":"item_2","type":"reasoning"}}\n`;
+    const empty = `{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":""}}\n`;
+    expect([...p.parse(enc(started)), ...p.parse(enc(empty)), ...p.flush()]).toEqual([]);
   });
 
   it("agent_message surfaces text_delta once, without duplicate tool_finished", () => {

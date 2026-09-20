@@ -2,11 +2,7 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import {
-  imageToBase64,
-  stageImageToTempFile,
-  stagedIsTemp,
-} from "../src/definition/image.js";
+import { imageToBase64, stageImageToTempFile, stagedIsTemp } from "../src/definition/image.js";
 import { buildClaudeStdinPrompt } from "../runtimes/claude/definition.js";
 import { ClaudeSession } from "../runtimes/claude/session.js";
 import { CodexSession } from "../runtimes/codex/session.js";
@@ -29,7 +25,10 @@ describe("image helpers", () => {
       const fromPath = imageToBase64({ path: file }, cwd);
       expect(fromPath.mimeType).toBe("image/png");
       expect(fromPath.base64).toBe(tinyPngBase64);
-      const fromData = imageToBase64({ data: Buffer.from(tinyPngBase64, "base64"), mimeType: "image/png" });
+      const fromData = imageToBase64({
+        data: Buffer.from(tinyPngBase64, "base64"),
+        mimeType: "image/png",
+      });
       expect(fromData.base64).toBe(tinyPngBase64);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
@@ -43,7 +42,10 @@ describe("image helpers", () => {
       const file = makePngFile(cwd);
       expect(stageImageToTempFile({ path: file }, cwd)).toBe(file);
       expect(stagedIsTemp(file, cwd)).toBe(false);
-      staged = stageImageToTempFile({ data: Buffer.from(tinyPngBase64, "base64"), mimeType: "image/png" }, cwd);
+      staged = stageImageToTempFile(
+        { data: Buffer.from(tinyPngBase64, "base64"), mimeType: "image/png" },
+        cwd,
+      );
       expect(existsSync(staged)).toBe(true);
       expect(stagedIsTemp(staged, cwd)).toBe(true);
     } finally {
@@ -76,12 +78,8 @@ describe("image helpers", () => {
       await claude.close();
       await codex.close();
       await opencode.close();
-      
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 });
-
-
-

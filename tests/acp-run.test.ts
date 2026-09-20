@@ -56,6 +56,19 @@ describe("AcpRun", () => {
     expect(types).toContain("done");
   }, 15000);
 
+  it("cancel ends the stream with done (hang mode)", async () => {
+    const run = new AcpRun("test:cancel", { transport: mockTransport("hang"), cwd: process.cwd() });
+    await run.start("hi");
+    await run.cancel();
+    const types: string[] = [];
+    for await (const e of run.events()) {
+      types.push(e.type);
+    }
+    expect(types[0]).toBe("session_started");
+    expect(types[types.length - 1]).toBe("done");
+    expect(types.filter((t) => t === "done")).toHaveLength(1);
+  }, 15000);
+
   it("emits session_started with the native id", async () => {
     const run = new AcpRun("test:sid", { transport: mockTransport("turn"), cwd: process.cwd() });
     try {

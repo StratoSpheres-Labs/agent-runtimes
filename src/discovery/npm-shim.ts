@@ -2,8 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, normalize, sep } from "node:path";
 
 export interface ShimLaunch {
-  /** Resolved node script target (existsSync-verified). Spawn via node with this as argv[0]. */
-  script: string;
+  /**
+   * Resolved node script target (existsSync-verified). Spawn via node with
+   * this as argv[0]. Absent when the shim forwards to a native binary.
+   */
+  script?: string;
+  /**
+   * Resolved native binary target (existsSync-verified). Spawn directly —
+   * no node, no shell. Newer CLIs (e.g. claude-code 2.1.276) ship a real
+   * `.exe` that the manager shim execs instead of `node *.js`.
+   */
+  binary?: string;
   /**
    * Extra env harvested from the shim (e.g. pnpm `NODE_PATH`). Merging is
    * the caller's job — never pass this object alone (the child would lose
@@ -13,9 +22,10 @@ export interface ShimLaunch {
 }
 
 /**
- * Resolve a Windows npm/pnpm `.cmd`/`.bat` shim to its node script target.
- * npm shims wrap `node <pkg>/bin/*.js`; raw `spawn(shim, {shell:false})`
- * fails with EINVAL because CreateProcess cannot execute batch files.
+ * Resolve a Windows npm/pnpm `.cmd`/`.bat` shim to what it actually runs.
+ * Classic shims wrap `node <pkg>/bin/*.js`; newer ones forward to a native
+ * binary (`<pkg>/bin/*.exe`). Raw `spawn(shim, {shell:false})` fails with
+ * EINVAL because CreateProcess cannot execute batch files.
  * Win32-only (POSIX shims execute via shebang); returns null when the
  * platform, suffix, content, or target doesn't cooperate.
  */
@@ -34,18 +44,27 @@ export function resolveShimTarget(
   }
   const dir = dirname(shimPath);
   const expand = (s: string): string => normalize(expandShimVars(s, dir));
-  const candidates: string[] = [];
-  const re = /"([^"]+\.js)"/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const cand = m[1] ?? "";
-    if (cand && !candidates.includes(cand)) candidates.push(expand(cand));
+  const quoted = (ext: string): string[] => {
+    const out: string[] = [];
+    const re = new RegExp(`"([^"]+\\.${ext})"`, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const cand = m[1] ?? "";
+      if (cand && !out.includes(cand)) out.push(expand(cand));
+    }
+    return out;
+  };
+  // Node-script shims keep the historical shape (script + harvested env).
+  const script = quoted("js").find((c) => existsSync(c));
+  if (script) {
+    const env = harvestNodePath(text, expand);
+    if (env) return { script, env };
+    return { script };
   }
-  const script = candidates.find((c) => existsSync(c));
-  if (!script) return null;
-  const env = harvestNodePath(text, expand);
-  if (env) return { script, env };
-  return { script };
+  // Native-binary shims (no .js target): spawn the exe directly.
+  const binary = quoted("exe").find((c) => existsSync(c));
+  if (binary) return { binary };
+  return null;
 }
 
 function expandShimVars(value: string, dir: string): string {

@@ -9,8 +9,12 @@ function enc(s: string): Uint8Array {
 
 describe("opencode buildArgs", () => {
   it("minimal args", () => {
-    expect(buildOpencodeArgs()).toEqual(["run", "--format", "json"]);
+    expect(buildOpencodeArgs()).toEqual(["run", "--format", "json", "--thinking"]);
     expect(buildOpencodeArgs({ format: "default" })).toEqual(["run", "--format", "default"]);
+  });
+
+  it("omits --thinking for human-readable format (display untouched)", () => {
+    expect(buildOpencodeArgs({ format: "default" })).not.toContain("--thinking");
   });
 
   it("includes model/session/variant/agent without leaking raw flags to core", () => {
@@ -24,6 +28,7 @@ describe("opencode buildArgs", () => {
       "run",
       "--format",
       "json",
+      "--thinking",
       "--model",
       "anthropic/claude-sonnet-4",
       "--session",
@@ -40,6 +45,7 @@ describe("opencode buildArgs", () => {
       "run",
       "--format",
       "json",
+      "--thinking",
       "--variant",
       "high",
     ]);
@@ -50,6 +56,7 @@ describe("opencode buildArgs", () => {
       "run",
       "--format",
       "json",
+      "--thinking",
       "--variant",
       "max",
     ]);
@@ -79,6 +86,7 @@ describe("OpencodeParser fixtures", () => {
     "empty.jsonl",
     "real-opencode.jsonl",
     "tool_use.jsonl",
+    "tool-completed.jsonl",
   ] as const;
 
   for (const name of fixtures) {
@@ -94,6 +102,7 @@ describe("OpencodeParser fixtures", () => {
       for (const e of all) {
         expect([
           "text_delta",
+          "reasoning_delta",
           "tool_started",
           "tool_finished",
           "error",
@@ -124,6 +133,41 @@ describe("OpencodeParser fixtures", () => {
     expect(evs).toEqual([{ type: "text_delta", text: "hi" }]);
   });
 
+  it("maps reasoning part → reasoning_delta (live 1.18.31 shape, ids anonymized)", () => {
+    // Verified live: `opencode run --format json --thinking` emits
+    // {"type":"reasoning",...,"part":{"type":"reasoning","text":"..."}}.
+    const p = new OpencodeParser();
+    const line = JSON.stringify({
+      type: "reasoning",
+      timestamp: 1789641894041,
+      sessionID: "ses_test",
+      part: {
+        id: "prt_test",
+        messageID: "msg_test",
+        sessionID: "ses_test",
+        type: "reasoning",
+        text: "Let me compute 17 times 23.",
+        time: { start: 1789641894023, end: 1789641894031 },
+      },
+    });
+    expect(p.parse(enc(line + "\n"))).toEqual([
+      { type: "reasoning_delta", text: "Let me compute 17 times 23." },
+    ]);
+  });
+
+  it("drops empty-text reasoning without error (encrypted-only, verified live)", () => {
+    // GPT-family models return encrypted reasoning with text:"" — a valid
+    // envelope with nothing displayable.
+    const p = new OpencodeParser();
+    const line = JSON.stringify({
+      type: "reasoning",
+      sessionID: "ses_test",
+      part: { id: "prt_test", type: "reasoning", text: "" },
+    });
+    expect(p.parse(enc(line + "\n"))).toEqual([]);
+    expect(p.flush()).toEqual([]);
+  });
+
   it("maps real opencode part.text shape", () => {
     const p = new OpencodeParser();
     const line = `{"type":"text","part":{"type":"text","text":"Hello from opencode"}}\n`;
@@ -141,15 +185,79 @@ describe("OpencodeParser fixtures", () => {
     expect(p.parse(enc('{"type":"step_finish"}\n'))).toEqual([]);
   });
 
-  it("maps tool_use → tool_started with callID/name/input", () => {
+  it("maps pending tool_use → tool_started with callID/name/input", () => {
     const p = new OpencodeParser();
     const line =
       `{"type":"tool_use","timestamp":1,"sessionID":"ses_1",` +
       `"part":{"type":"tool","tool":"read","callID":"call_abc",` +
-      `"state":{"status":"completed","input":{"filePath":"a.txt"}}}}\n`;
+      `"state":{"status":"pending","input":{"filePath":"a.txt"}}}}\n`;
     expect(p.parse(enc(line))).toEqual([
       { type: "tool_started", id: "call_abc", name: "read", input: { filePath: "a.txt" } },
     ]);
+  });
+
+  it("maps a single completed tool_use → tool_started + tool_finished (paired id)", () => {
+    // Fast tools arrive as ONE line carrying input and output together.
+    const p = new OpencodeParser();
+    const line =
+      `{"type":"tool_use","timestamp":1,"sessionID":"ses_1",` +
+      `"part":{"type":"tool","tool":"bash","callID":"call_xyz",` +
+      `"state":{"status":"completed","input":{"command":"echo hi"},"output":"hi\\r\\n",` +
+      `"metadata":{"output":"hi\\r\\n","exit":0,"truncated":false}}}}\n`;
+    expect(p.parse(enc(line))).toEqual([
+      {
+        type: "tool_started",
+        id: "call_xyz",
+        name: "bash",
+        input: { command: "echo hi" },
+      },
+      { type: "tool_finished", id: "call_xyz", output: "hi\r\n", error: false },
+    ]);
+  });
+
+  it("pending then completed emits exactly one start and one finish", () => {
+    const p = new OpencodeParser();
+    const pending =
+      `{"type":"tool_use","part":{"type":"tool","tool":"read","callID":"c9",` +
+      `"state":{"status":"running","input":{}}}}\n`;
+    const completed =
+      `{"type":"tool_use","part":{"type":"tool","tool":"read","callID":"c9",` +
+      `"state":{"status":"completed","input":{},"output":"ok"}}}\n`;
+    const evs = [...p.parse(enc(pending)), ...p.parse(enc(completed))];
+    expect(evs.map((e) => e.type)).toEqual(["tool_started", "tool_finished"]);
+    expect(evs[0]).toMatchObject({ id: "c9" });
+    expect(evs[1]).toMatchObject({ id: "c9", output: "ok", error: false });
+  });
+
+  it("marks tool_finished error on error status or nonzero exit", () => {
+    const p = new OpencodeParser();
+    const line =
+      `{"type":"tool_use","part":{"type":"tool","tool":"bash","callID":"ce",` +
+      `"state":{"status":"error","input":{},"output":"boom"}}}\n`;
+    const evs = p.parse(enc(line));
+    expect(evs[evs.length - 1]).toMatchObject({ type: "tool_finished", id: "ce", error: true });
+  });
+
+  it("pairs start/finish across the live tool-completed fixture", () => {
+    const raw = readFileSync("runtimes/opencode/fixtures/tool-completed.jsonl", "utf-8");
+    const p = new OpencodeParser();
+    const evs = [...p.parse(enc(raw)), ...p.flush()];
+    expect(evs.map((e) => e.type)).toEqual([
+      "session_started",
+      "text_delta",
+      "tool_started",
+      "tool_finished",
+      "session_started",
+      "text_delta",
+    ]);
+    const started = evs[2];
+    const finished = evs[3];
+    expect(started).toMatchObject({ type: "tool_started", name: "bash" });
+    expect(finished).toMatchObject({ type: "tool_finished", error: false });
+    if (started?.type === "tool_started" && finished?.type === "tool_finished") {
+      expect(finished.id).toBe(started.id);
+      expect(JSON.stringify(finished.output)).toContain("hello-tool");
+    }
   });
 
   it("recovers session_started when step_start splits across chunks", () => {

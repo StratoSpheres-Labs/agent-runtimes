@@ -8,6 +8,18 @@ export interface RuntimeModel {
   id: string;
   name?: string;
   provider?: string;
+  /**
+   * Per-model reasoning choices advertised live (e.g. opencode `models
+   * --verbose` `variants` keys). Absent = unknown (plain listing) or none.
+   * buildArgs only emits a `--variant` the list actually contains.
+   */
+  reasoningOptions?: ModelReasoningOption[];
+}
+
+/** One advertised reasoning choice (`{ id: "high", label: "high" }`). */
+export interface ModelReasoningOption {
+  id: string;
+  label?: string;
 }
 
 export interface ModelDefinition {
@@ -15,4 +27,24 @@ export interface ModelDefinition {
   fallbackModels: RuntimeModel[];
   /** Command to list models live (e.g. `opencode models`) */
   listCommand?: string[];
+}
+
+/**
+ * Model ids travel as CLI argv values (`--model <id>`), so a hostile id
+ * like `--dangerously-skip-permissions` would be parsed as a flag by the
+ * agent CLI. Accept the daemon's charset: must start alphanumerical,
+ * then alphanumerics plus `._/:@-` (covers `sonnet`, `gpt-5.4-mini`,
+ * `anthropic/claude-sonnet-4-5`, `provider/model@tag`), max 200 chars.
+ * Returns the trimmed id, or null when it must not reach argv.
+ * Pure (no throw) — adapters reject null loudly at buildArgs time.
+ */
+const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/;
+const MAX_MODEL_ID_LENGTH = 200;
+
+export function sanitizeModelId(id: string | null | undefined): string | null {
+  if (typeof id !== "string") return null;
+  const trimmed = id.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_MODEL_ID_LENGTH) return null;
+  if (!MODEL_ID_PATTERN.test(trimmed)) return null;
+  return trimmed;
 }

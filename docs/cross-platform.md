@@ -13,26 +13,32 @@ differently per OS. When in doubt, test on all three via the CI matrix (§8).
   `.cmd` > bare** — this matches what `spawn(name)` with `shell: false`
   actually executes via PATHEXT.
 - npm global shims (`*.cmd`, `*.ps1`) are **not directly spawnable** with
-  `shell: false`. Always resolve to the underlying `.exe` (e.g.
-  `.../node_modules/opencode-ai/bin/opencode.exe`) before spawning.
-  `detect()` must return that resolved absolute path, and `createSession()`
-  must spawn it — never re-resolve the bare name at spawn time (bare-name
-  resolution can drift to a different, stale shim).
-- If only a shim exists (no native `.exe`), `detect()` still reports it
-  honestly — the failure then surfaces at spawn time as `RuntimeSpawnError`
-  (with a shim hint on Windows), never as a raw `EINVAL` host crash.
+  `shell: false` (`spawn EINVAL`). Every adapter resolves through the shared
+  `resolveLaunch()` (`src/discovery/launch.ts`): shim → host node + script,
+  native binary → passthrough. `detect()` reports the shim path (what the
+  user installed); `createSession()` and all probes spawn through the launch
+  — never re-resolve the bare name at spawn time (bare-name resolution can
+  drift to a different, stale shim). Never reimplement per adapter (Rule 7).
 - `findExecutable` compares **all** candidates — every `where` row on
-  Windows, every `which -a` hit on POSIX, plus the known install
-  locations below — by probing `--version` and returns the newest. With
-  a single candidate there is exactly one probe. If no candidate
+  Windows, every `which -a` hit on POSIX, plus known install locations and
+  `toolchainProbePaths()` — by probing `--version` and returns the newest.
+  With a single candidate there is exactly one probe. If no candidate
   reports a version, the first PATH hit is returned (`installed:true`,
   `version:null`).
-- Known install locations outside PATH are still opencode-specific
-  (win32: npm-global `opencode-ai` bundle, bun dirs; POSIX: `~/.bun/bin`,
-  `/usr/local/bin`, `/opt/homebrew/bin`). This is in tension with Rule 1
-  (no agent-specific branching in shared code). Generalize before adding
-  the next agent: move fallback locations into `ExecutableDefinition`
-  (e.g. `extraProbePaths?: string[]`). Home directories resolve from env
+- **Policy decision (newest-wins retained, conscious divergence from
+  open-design's PATH-order-first):** dev-machine PATHs routinely have stale
+  shims ranked ahead of good installs (hence `.exe > .cmd` above); newest
+  invocable wins regardless of order. Proven-dead paths are remembered for
+  60s (`rememberUnusableExecutable`, skipped on rescan) so only live
+  candidates pay probe spawns — PATH order stays in charge of everything
+  still standing, and `forgetUnusableExecutables()` forces a rescan.
+- Known install locations outside PATH live in each adapter's
+  `ExecutableDefinition.extraProbePaths` (absolute or `~`-prefixed, resolved
+  by `resolveExtraProbePaths()`; nonexistent entries are skipped, so
+  platform-specific paths like the macOS Codex.app bundle are harmless
+  elsewhere). They are consulted after PATH hits and participate in the same
+  newest-version pick — including with zero PATH hits (app-bundle-only
+  installs). Home directories resolve from env
   (`USERPROFILE`/`HOME`, `APPDATA`, `LOCALAPPDATA`) — never hardcode
   usernames or absolute paths.
 
@@ -99,6 +105,16 @@ differently per OS. When in doubt, test on all three via the CI matrix (§8).
   POSIX. Resolve via env with fallback, never hardcode.
 - `PATH` lookup must go through `where`/`which`, never manual splitting
   (`path.delimiter` differs and Windows lookup is case-insensitive).
+- GUI-launched hosts (macOS `.app`, Linux `.desktop`, Electron) inherit a
+  minimal `PATH`: extend both discovery and spawn env with
+  `userToolchainBinDirs()` (Homebrew, `~/.local/bin`, `~/.bun/bin`, npm
+  globals, nvm versions — `src/discovery/toolchain.ts`). Resolution and spawn
+  `PATH` must stay symmetric, or a resolved binary dies on a missing shebang
+  interpreter. Appended, never prepended — explicit user order keeps winning.
+- Win32 npm `.cmd`/`.bat` shims are never spawned directly (`spawn EINVAL`).
+  Every adapter resolves through `resolveLaunch()`
+  (`src/discovery/launch.ts`: shim → host node + script, native → passthrough)
+  for sessions and all probes — never reimplement per adapter.
 
 ## 8. CI matrix (required before v1.0.0)
 
@@ -128,9 +144,6 @@ steps:
 1. No `maxPromptArgBytes` guard for argv-delivered prompts
    (Windows `CreateProcess` ~32767 char limit fails as
    `ENAMETOOLONG`/`E2BIG` instead of an actionable error).
-2. Fallback install locations are still opencode-specific — generalize
-   into `ExecutableDefinition` (e.g. `extraProbePaths?: string[]`)
-   before adding the next agent family (Rule 1 tension).
-3. CI workflow exists (`.github/workflows/ci.yml`) but the repo has no
+2. CI workflow exists (`.github/workflows/ci.yml`) but the repo has no
    pushed commits yet — the macOS/Linux legs have never gone green.
    Do not claim support until the matrix is green.

@@ -258,7 +258,8 @@ export class AcpTransport {
         // If handler explicitly signals -32601, fall through to default error;
         // otherwise forward the handler's error verbatim.
         if (!message.includes("-32601")) {
-          const code = err instanceof Error && (err as { code?: number }).code === -32601 ? -32601 : -32600;
+          const code =
+            err instanceof Error && (err as { code?: number }).code === -32601 ? -32601 : -32600;
           this.send({ jsonrpc: "2.0", id, error: { code, message } });
           return;
         }

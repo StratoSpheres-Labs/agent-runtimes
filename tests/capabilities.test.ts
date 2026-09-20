@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { capabilitiesFromHelp, probeHelpFlags } from "../src/discovery/capabilities.js";
 import type { RuntimeCapabilities } from "../src/definition/capability.js";
+import { claudeDefinition } from "../runtimes/claude/definition.js";
+import { findExecutable } from "../src/discovery/executable.js";
 
 const base: RuntimeCapabilities = {
   streaming: true,
@@ -43,4 +45,20 @@ describe("probeHelpFlags", () => {
     const flags = await probeHelpFlags("definitely-not-exist-xyz", ["--model"]);
     expect(flags["--model"]).toBe(false);
   });
+
+  it("claude declares subcommand help args", () => {
+    // --add-dir only lives under `claude -p` on older builds (open-design
+    // issue #430) — the definition must point the prober there.
+    expect(claudeDefinition.executable.helpArgs).toEqual(["-p", "--help"]);
+  });
+
+  it("finds --add-dir through claude's help args when installed", async () => {
+    const exe = await findExecutable("claude", claudeDefinition.executable.aliases ?? []);
+    if (!exe) return;
+    const helpArgs = claudeDefinition.executable.helpArgs ?? ["--help"];
+    const flags = await probeHelpFlags(exe, ["--add-dir"], helpArgs);
+    expect(flags["--add-dir"]).toBe(true);
+    // findExecutable fans out to version probes and `claude -p` starts
+    // slowly (plugin sync) — allow headroom under full-suite load.
+  }, 30000);
 });

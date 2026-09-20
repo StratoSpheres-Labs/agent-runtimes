@@ -80,4 +80,3 @@ export function deleteSessionRecord(id: string): void {
 export function getSessionStoreDir(): string {
   return storeDir();
 }
-

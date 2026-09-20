@@ -1,0 +1,16 @@
+# Normalize line endings to LF in the repo on every platform.
+# Without this, Windows checkouts with core.autocrlf produce CRLF files
+# and `pnpm format:check` (Prettier endOfLine: lf) fails.
+* text=auto
+*.ts text eol=lf
+*.mts text eol=lf
+*.cts text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.jsonl text eol=lf

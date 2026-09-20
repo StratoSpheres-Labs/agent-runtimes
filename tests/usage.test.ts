@@ -25,7 +25,12 @@ describe("usage events", () => {
     const line = `{"type":"result","subtype":"success","usage":{"input_tokens":10,"output_tokens":20},"total_cost_usd":0.005}\n`;
     const evs = p.parse(enc(line));
     expect(evs.map((e) => e.type)).toEqual(["usage", "done"]);
-    expect(evs[0]).toMatchObject({ type: "usage", inputTokens: 10, outputTokens: 20, costUsd: 0.005 });
+    expect(evs[0]).toMatchObject({
+      type: "usage",
+      inputTokens: 10,
+      outputTokens: 20,
+      costUsd: 0.005,
+    });
   });
 
   it("Codex turn.completed with usage → usage + done", () => {

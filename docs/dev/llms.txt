@@ -1,0 +1,73 @@
+# agent-runtimes Documentation Index
+
+> Universal runtime layer for local AI coding agents (opencode, claude,
+> codex). One API: Runtime → Session → Run → RuntimeEvent. TypeScript,
+> Node >= 20, Apache-2.0. Package: agent-runtimes (unpublished, local path).
+
+## Getting Started
+
+- Overview: docs/dev/getting-started/overview.md — what it is/isn't, the four-step flow.
+- 101: docs/dev/getting-started/101.md — why CLIs differ and what gets normalized.
+- Install: docs/dev/getting-started/install.md — build from source, verify with doctor.
+- Quickstart: docs/dev/getting-started/quickstart.md — first run: detect → session → run → events.
+
+## Core Concepts
+
+- Core model: docs/dev/concepts/core-model.md — Runtime ≠ Session ≠ Run ≠ Transport ≠ Parser; Session spans Processes.
+- Events: docs/dev/concepts/events.md — 9 RuntimeEvent types, runId, reasoning_delta, cancel-done semantics.
+- Capabilities: docs/dev/concepts/capabilities.md — branch on capabilities(), never runtime.id.
+- Rules: docs/dev/concepts/rules.md — the seven hard rules (Rule 1–7).
+
+## Discovery (read-only)
+
+- Installs: docs/dev/discovery/installs.md — runtime.installs(), findAllInstalls(), per-platform recognition.
+- Models & auth: docs/dev/discovery/models-auth.md — models(), auth(), model validation at createSession.
+- MCP, skills, plugins: docs/dev/discovery/media-skills.md — mcp(), skills(), plugins() metadata only.
+- Updates: docs/dev/discovery/updates.md — npm registry check, Version row "→ latest" suffix.
+- Doctor: docs/dev/discovery/doctor.md — doctor(), reason codes, exit codes.
+
+## Running
+
+- Sessions: docs/dev/running/sessions.md — createSession options (cwd, model, reasoning, mcpServers, workspace).
+- Streaming: docs/dev/running/runs-streaming.md — run.events(), one active run per session.
+- Lifecycle: docs/dev/running/lifecycle.md — cancel (terminal done) vs close (silent), timeouts.
+- Workspace: docs/dev/running/workspace.md — allowedPaths, sandbox, permission modes.
+- Permissions: docs/dev/running/permissions.md — permission_request flow, respondToPermission.
+- Images: docs/dev/running/images.md — path-primary image input per turn.
+- History: docs/dev/running/history.md — session.history() from native transcripts, privacy rules.
+
+## Guides
+
+- Frontend wire: docs/dev/guides/frontend-wire.md — NDJSON framing, wire types (see docs/frontend.md).
+- Cross-platform: docs/dev/guides/cross-platform.md — Windows/POSIX shims, signals, paths (see docs/cross-platform.md).
+- Multi-agent: docs/dev/guides/multi-agent.md — shared workspace, CONTEXT.md blackboard, partitioning.
+- New runtime: docs/dev/guides/new-runtime.md — authoring an adapter as a pressure test (see docs/runtime-authoring.md).
+
+## Resources
+
+- Errors: docs/dev/resources/errors.md — RuntimeError hierarchy (6 subclasses), fail-open philosophy.
+- CLI: docs/dev/resources/cli.md — `doctor <id>` reference.
+- FAQ: docs/dev/resources/faq.md — common questions.
+
+## Key API signatures
+
+```ts
+import { runtimes } from "agent-runtimes";
+const runtime = await runtimes.resolve("opencode" | "claude" | "codex");
+const status = await runtime.detect(); // { installed: true, executable, version } | { installed: false }
+const session = await runtime.createSession({ cwd?: string; model?: string });
+const run = await session.run(prompt: string);
+for await (const event of run.events()) { /* RuntimeEvent */ }
+await run.cancel(); // ends stream with terminal `done`
+await session.close();
+const history = await session.history({ limit?: number; since?: number });
+const installs = await runtime.installs(); // InstalledCopy[] { binary, shims, version, manager, invocable, selected }
+```
+
+## Deep dives (docs/)
+
+- docs/architecture.md — the model + seven rules.
+- docs/development.md — setup, test tiers, release.
+- docs/frontend.md — wire contract details.
+- docs/runtime-authoring.md — new adapters.
+- docs/cross-platform.md — platform rules.

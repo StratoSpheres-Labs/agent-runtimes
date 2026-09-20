@@ -7,8 +7,11 @@ import type { AgentRun } from "../../src/core/run.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import type { PermissionHandler } from "../../src/definition/permission.js";
+import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
+import { readOpencodeTranscript } from "../opencode/transcript.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
+import { resolveLaunch } from "../../src/discovery/launch.js";
 import { AcpTransport } from "../../src/transport/acp.js";
 import { AcpRun } from "../../src/core/acp-run.js";
 
@@ -27,7 +30,7 @@ export class OpencodeAcpSession implements AgentSession {
   private readonly command: string;
   private readonly cwd: string;
   private readonly model: string | undefined;
-  private readonly mcpServers: McpServer[] | undefined;
+  public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly onPermissionRequest: PermissionHandler | undefined;
 
@@ -64,8 +67,16 @@ export class OpencodeAcpSession implements AgentSession {
     prompt: string,
     runOpts: SessionRunOptions,
   ): Promise<AgentRun> {
-    const env = buildAgentEnv("opencode-acp", process.env);
-    const transport = new AcpTransport({ command: this.command, args: ["acp"], cwd: this.cwd, env });
+    // Shim-aware spawn (win32 npm `.cmd` needs host node); native binaries
+    // pass through untouched. Launch env seeds the agent env merge.
+    const launch = resolveLaunch(this.command);
+    const env = buildAgentEnv("opencode-acp", launch.env ?? process.env);
+    const transport = new AcpTransport({
+      command: launch.command,
+      args: [...launch.prependArgs, "acp"],
+      cwd: this.cwd,
+      env,
+    });
     const run = new AcpRun(runId, {
       transport,
       cwd: this.cwd,
@@ -90,13 +101,22 @@ export class OpencodeAcpSession implements AgentSession {
           model: this.model,
           updatedAt: Date.now(),
         });
-      } catch (_e: unknown) { String(_e); }
+      } catch (_e: unknown) {
+        String(_e);
+      }
     }
     return run;
   }
 
   public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
     return this.inner.run(prompt, options);
+  }
+
+  public async history(options?: HistoryOptions): Promise<TranscriptEntry[]> {
+    // ACP turns share opencode's store when the native id is an opencode
+    // session id; anything else misses and fails open to [].
+    if (!this.acpSessionId) return [];
+    return readOpencodeTranscript({ sessionId: this.acpSessionId, ...options });
   }
 
   public async resume(): Promise<void> {
@@ -117,11 +137,3 @@ export class OpencodeAcpSession implements AgentSession {
     return this.acpSessionId;
   }
 }
-
-
-
-
-
-
-
-

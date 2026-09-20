@@ -1,9 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DefaultRuntime } from "../src/core/runtime.js";
 import { opencodeDefinition } from "../runtimes/opencode/definition.js";
-import { parseOpencodeAuthList, probeOpencodeAuth } from "../runtimes/opencode/runtime.js";
+import {
+  parseOpencodeAuthList,
+  probeOpencodeAuth,
+  readOpencodeAuthFile,
+} from "../runtimes/opencode/runtime.js";
 import { parseClaudeAuthStatus, probeClaudeAuth } from "../runtimes/claude/runtime.js";
 import { parseCodexLoginStatus, probeCodexAuth } from "../runtimes/codex/runtime.js";
+import { stderrTail, withStderrTail } from "../src/definition/auth.js";
+
+describe("stderrTail", () => {
+  it("takes the last non-empty line, capped at 200 chars", () => {
+    expect(stderrTail("")).toBeNull();
+    expect(stderrTail("  \n  ")).toBeNull();
+    expect(stderrTail("first\nsecond\n")).toBe("second");
+    const long = `x${"y".repeat(500)}`;
+    const capped = stderrTail(long);
+    expect(capped?.length).toBe(200);
+    expect(long.startsWith(capped ?? "")).toBe(true);
+  });
+
+  it("withStderrTail leaves clean bases untouched", () => {
+    expect(withStderrTail("base", "")).toBe("base");
+    expect(withStderrTail("base", "boom")).toBe("base: boom");
+  });
+});
 
 // Modeled on real `opencode auth list` output (1.18.27), ANSI included.
 const OPENCODE_SAMPLE =
@@ -47,12 +72,95 @@ describe("probeOpencodeAuth (hermetic)", () => {
   });
 
   it("reports unknown (not logged-out) when the binary is missing", async () => {
-    const res = await probeOpencodeAuth("definitely-not-a-binary-xyz");
-    expect(res).toEqual({
-      authenticated: false,
-      method: "unknown",
-      detail: "opencode auth probe could not start",
-    });
+    // Isolated dataDir: the real ~/.local/share may contain auth.json on this
+    // machine, which would (correctly) trigger the file fallback instead.
+    const empty = mkdtempSync(join(tmpdir(), "opencode-auth-empty-"));
+    try {
+      const res = await probeOpencodeAuth("definitely-not-a-binary-xyz", [], {
+        dataDir: empty,
+      });
+      expect(res).toEqual({
+        authenticated: false,
+        method: "unknown",
+        detail: "opencode auth probe could not start",
+      });
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("attaches the stderr tail on probe failure (no auth.json fallback)", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "opencode-auth-tail-"));
+    try {
+      const res = await probeOpencodeAuth(
+        process.execPath,
+        ["-e", "console.error('opencode: 401 Unauthorized'); process.exit(1)"],
+        { dataDir: empty },
+      );
+      expect(res.authenticated).toBe(false);
+      expect(res.detail).toContain("exit 1");
+      expect(res.detail).toContain("opencode: 401 Unauthorized");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to auth.json when the CLI probe fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "opencode-auth-file-"));
+    try {
+      mkdirSync(join(dir, "opencode"), { recursive: true });
+      // Fake key material — assertions only touch ids/types, never values.
+      writeFileSync(
+        join(dir, "opencode", "auth.json"),
+        JSON.stringify({
+          "fake-provider": { type: "api", key: "sk-fake-never-logged" },
+          "fake-oauth": { type: "oauth", key: "tok-fake-never-logged" },
+        }),
+      );
+      const res = await probeOpencodeAuth("definitely-not-a-binary-xyz", [], {
+        dataDir: dir,
+      });
+      expect(res.authenticated).toBe(true);
+      expect(res.method).toBe("oauth");
+      expect(res.identities).toEqual(["fake-provider", "fake-oauth"]);
+      expect(res.detail).not.toContain("sk-fake-never-logged");
+      expect(res.detail).not.toContain("tok-fake-never-logged");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readOpencodeAuthFile", () => {
+  it("returns null for missing/malformed files", () => {
+    const empty = mkdtempSync(join(tmpdir(), "opencode-auth-missing-"));
+    try {
+      expect(readOpencodeAuthFile({ dataDir: empty })).toBeNull();
+      writeFileSync(join(empty, "auth.json"), "not json{{{");
+      // Without the opencode/ subdir the file is not found either.
+      expect(readOpencodeAuthFile({ dataDir: empty })).toBeNull();
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("reads provider ids + types, never key material", () => {
+    const dir = mkdtempSync(join(tmpdir(), "opencode-auth-read-"));
+    try {
+      mkdirSync(join(dir, "opencode"), { recursive: true });
+      writeFileSync(
+        join(dir, "opencode", "auth.json"),
+        JSON.stringify({ solo: { type: "api", key: "sk-fake-123" } }),
+      );
+      expect(readOpencodeAuthFile({ dataDir: dir })).toEqual({
+        authenticated: true,
+        method: "api-key",
+        identities: ["solo"],
+        detail: "1 opencode credential(s): solo (from auth.json)",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -94,6 +202,17 @@ describe("probeClaudeAuth (hermetic)", () => {
       detail: "logged in via api_key",
     });
   });
+
+  it("attaches the stderr tail on probe failure", async () => {
+    const res = await probeClaudeAuth(process.execPath, [
+      "-e",
+      "console.error('claude: command not found'); process.exit(1)",
+    ]);
+    expect(res.authenticated).toBe(false);
+    expect(res.method).toBe("unknown");
+    expect(res.detail).toContain("exit 1");
+    expect(res.detail).toContain("claude: command not found");
+  });
 });
 
 describe("parseCodexLoginStatus", () => {
@@ -134,6 +253,16 @@ describe("probeCodexAuth (hermetic)", () => {
       `console.error(${JSON.stringify("Logged in using ChatGPT")})`,
     ]);
     expect(res.authenticated).toBe(true);
+  });
+
+  it("attaches the stderr tail on probe failure", async () => {
+    const res = await probeCodexAuth(process.execPath, [
+      "-e",
+      "console.error('codex: missing credentials file'); process.exit(1)",
+    ]);
+    expect(res.authenticated).toBe(false);
+    expect(res.detail).toContain("exit 1");
+    expect(res.detail).toContain("codex: missing credentials file");
   });
 });
 

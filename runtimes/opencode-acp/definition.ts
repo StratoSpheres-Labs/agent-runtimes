@@ -14,6 +14,9 @@ export const opencodeAcpDefinition: RuntimeDefinition = {
   executable: {
     command: "opencode",
     versionArgs: ["--version"],
+    // Same binary as the CLI adapter — share its known locations.
+    extraProbePaths: opencodeDefinition.executable.extraProbePaths,
+    registryId: opencodeDefinition.executable.registryId,
   },
   // Prompt travels inside JSON-RPC over stdin (framed), not as raw stdin text.
   input: {
@@ -41,6 +44,8 @@ export const opencodeAcpDefinition: RuntimeDefinition = {
   },
   // Same binary, same model catalog — single source of truth.
   models: opencodeDefinition.models,
+  // Same binary, same tested versions.
+  versionPolicy: opencodeDefinition.versionPolicy,
 };
 
 export function buildOpencodeAcpArgs(): string[] {
