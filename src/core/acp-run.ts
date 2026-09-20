@@ -142,7 +142,7 @@ export class AcpRun implements AgentRun {
         terminal: false,
       },
       // Keep in sync with package.json (no importable version constant in src).
-      clientInfo: { name: "agent-runtimes", version: "0.1.0" },
+      clientInfo: { name: "agent-runtimes", version: "0.1.1" },
     });
     let sessionId: string | null = null;
     if (this.resumeSessionId !== undefined) {

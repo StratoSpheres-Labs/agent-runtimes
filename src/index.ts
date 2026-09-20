@@ -1,4 +1,4 @@
-export const version = "0.1.0";
+export const version = "0.1.1";
 
 // Definition
 export type { RuntimeDefinition } from "./definition/index.js";
