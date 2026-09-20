@@ -51,7 +51,7 @@ See `Dev_Docs:1885-1911` and `runtimes/opencode/` as reference.
  generic `DefaultRuntime` stub without your wired `createSession`):
 
  ```ts
- import { RuntimeRegistry } from "agent-runtimes";
+ import { RuntimeRegistry } from "@stratosphereslab/agent-runtimes";
  import { myDefinition } from "./runtimes/my-agent/definition.js";
  import { MyRuntime } from "./runtimes/my-agent/runtime.js";
  const registry = new RuntimeRegistry();

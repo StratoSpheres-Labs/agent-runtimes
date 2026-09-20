@@ -9,7 +9,7 @@ import { opencodeAcpDefinition } from "../runtimes/opencode-acp/definition.js";
 import { OpencodeAcpRuntime } from "../runtimes/opencode-acp/runtime.js";
 
 /**
- * Phase 18 — pre-registered facade behind `import { runtimes } from "agent-runtimes"`.
+ * Phase 18 — pre-registered facade behind `import { runtimes } from "@stratosphereslab/agent-runtimes"`.
  *
  * ```ts
  * const runtime = await runtimes.resolve("opencode"); // OpencodeRuntime, not a stub

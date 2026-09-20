@@ -97,7 +97,7 @@ Four suites required (`Dev_Docs/agent_runtimes_dev_plan.md:1619-1695`):
 ## 12. Reference — Ideal Developer Experience (implemented)
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 const runtime = await runtimes.resolve("opencode"); // or "claude" / "codex" — same API
 const status = await runtime.detect(); // { installed, executable, version }
 const session = await runtime.createSession({ cwd: "./my-project" });

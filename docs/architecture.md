@@ -50,7 +50,11 @@ Parser —— 只管翻译，不认识进程（Rule 4）
 ## Public API
 
 ```ts
-import { RuntimeRegistry, opencodeDefinition, OpencodeRuntime } from "agent-runtimes";
+import {
+  RuntimeRegistry,
+  opencodeDefinition,
+  OpencodeRuntime,
+} from "@stratosphereslab/agent-runtimes";
 const registry = new RuntimeRegistry();
 registry.register(opencodeDefinition);
 const runtime = await registry.resolve("opencode"); // or new OpencodeRuntime()

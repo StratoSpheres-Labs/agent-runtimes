@@ -6,7 +6,7 @@ at least one CLI is on PATH.
 ## 1. Detect
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 
 const runtime = await runtimes.resolve("opencode"); // or "claude" / "codex"
 const status = await runtime.detect();

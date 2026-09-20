@@ -186,7 +186,7 @@ for await (const e of run.events()) if (e.type === "text_delta") text += e.text;
 ### 3. 随手活检
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 const rt = await runtimes.resolve("claude");
 const s = await rt.createSession({
   cwd,
@@ -299,7 +299,7 @@ export class MyRuntime extends DefaultRuntime {
 **6. 注册**：
 
 ```ts
-import { RuntimeRegistry } from "agent-runtimes";
+import { RuntimeRegistry } from "@stratosphereslab/agent-runtimes";
 import { myDefinition } from "./runtimes/my-agent/definition.js";
 import { MyRuntime } from "./runtimes/my-agent/runtime.js";
 const registry = new RuntimeRegistry();
@@ -372,14 +372,14 @@ import {
   deleteSessionRecord,
   setSessionStoreDir,
   getSessionStoreDir,
-} from "agent-runtimes";
+} from "@stratosphereslab/agent-runtimes";
 ```
 
 - 默认 `~/.agent-runtimes/sessions/<daemonId>.json`（`homedir()` 取不到则回 `os.tmpdir()`），每次 `session_started` 自动存 `{id,nativeId,cwd,model,updatedAt}`。
 - 回放：`createSession({ resumeSessionId: nativeId })` 经 `--resume` / `-s` / `exec resume` / `session/load` 重放。
 - Electron 覆盖：
   ```ts
-  import { setSessionStoreDir } from "agent-runtimes";
+  import { setSessionStoreDir } from "@stratosphereslab/agent-runtimes";
   setSessionStoreDir(join(app.getPath("userData"), "sessions"));
   ```
 - 单测隔离：`setSessionStoreDir(mkdtempSync(join(tmpdir(),"test-store-")))` + `afterEach: setSessionStoreDir(null)`。

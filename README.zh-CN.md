@@ -27,16 +27,20 @@
 要求 `Node.js >= 20`。
 
 ```bash
+npm i @stratosphereslab/agent-runtimes
+```
+
+或用 pnpm（`pnpm add @stratosphereslab/agent-runtimes`），或从源码构建：
+
+```bash
 git clone <this-repo> && cd agent-runtimes
 pnpm install && pnpm build
 ```
 
-> 尚未发布到 npm——首个 release 之前 `pnpm add agent-runtimes` 解析不到。请用本地路径引用或 `pnpm link`。
-
 ## 用法
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 
 const runtime = await runtimes.resolve("opencode"); // 或 "claude" / "codex"
 const status = await runtime.detect(); // { installed, executable, version }

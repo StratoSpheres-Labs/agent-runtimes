@@ -192,7 +192,7 @@ for await (const e of run.events()) if (e.type === "text_delta") text += e.text;
 ### 3. Live Ad-hoc
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 const rt = await runtimes.resolve("claude");
 const s = await rt.createSession({
   cwd,
@@ -305,7 +305,7 @@ export class MyRuntime extends DefaultRuntime {
 **6. Register**:
 
 ```ts
-import { RuntimeRegistry } from "agent-runtimes";
+import { RuntimeRegistry } from "@stratosphereslab/agent-runtimes";
 import { myDefinition } from "./runtimes/my-agent/definition.js";
 import { MyRuntime } from "./runtimes/my-agent/runtime.js";
 const registry = new RuntimeRegistry();
@@ -378,14 +378,14 @@ import {
   deleteSessionRecord,
   setSessionStoreDir,
   getSessionStoreDir,
-} from "agent-runtimes";
+} from "@stratosphereslab/agent-runtimes";
 ```
 
 - Default store: `~/.agent-runtimes/sessions/<daemonId>.json` (`homedir()` fallback `os.tmpdir()`). Each `session_started` auto-saves `{id,nativeId,cwd,model,updatedAt}`.
 - Hydration: `createSession({ resumeSessionId: nativeId })` replays via `--resume` / `-s` / `exec resume` / `session/load`.
 - Electron override:
   ```ts
-  import { setSessionStoreDir } from "agent-runtimes";
+  import { setSessionStoreDir } from "@stratosphereslab/agent-runtimes";
   setSessionStoreDir(join(app.getPath("userData"), "sessions"));
   ```
 - Tests isolate with `setSessionStoreDir(mkdtempSync(join(tmpdir(),"test-store-")))` + `afterEach: setSessionStoreDir(null)`.

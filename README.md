@@ -31,16 +31,20 @@ All four also expose read-only discovery — `models()`, `auth()`, `mcp()`, `ski
 Requires `Node.js >= 20`.
 
 ```bash
+npm i @stratosphereslab/agent-runtimes
+```
+
+Or with pnpm (`pnpm add @stratosphereslab/agent-runtimes`), or from source:
+
+```bash
 git clone <this-repo> && cd agent-runtimes
 pnpm install && pnpm build
 ```
 
-> Not yet published to npm — `pnpm add agent-runtimes` will not resolve until the first release. Until then, consume it via a local path or `pnpm link`.
-
 ## Usage
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 
 const runtime = await runtimes.resolve("opencode"); // or "claude" / "codex"
 const status = await runtime.detect(); // { installed, executable, version }

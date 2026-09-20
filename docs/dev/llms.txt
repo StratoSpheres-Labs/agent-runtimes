@@ -52,7 +52,7 @@
 ## Key API signatures
 
 ```ts
-import { runtimes } from "agent-runtimes";
+import { runtimes } from "@stratosphereslab/agent-runtimes";
 const runtime = await runtimes.resolve("opencode" | "claude" | "codex");
 const status = await runtime.detect(); // { installed: true, executable, version } | { installed: false }
 const session = await runtime.createSession({ cwd?: string; model?: string });
