@@ -71,6 +71,8 @@ describe("isExecutableFile", () => {
       writeFileSync(exe, "x");
       writeFileSync(bare, "x");
       writeFileSync(text, "x");
+      // Fresh files lack +x on POSIX — set it, like the bit test below does.
+      if (process.platform !== "win32") chmodSync(exe, 0o755);
       expect(isExecutableFile(exe)).toBe(true);
       expect(isExecutableFile(dir)).toBe(false);
       expect(isExecutableFile(join(dir, "missing"))).toBe(false);

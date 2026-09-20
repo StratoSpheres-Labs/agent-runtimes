@@ -50,6 +50,22 @@ jobs:
       # Full tests already gate every push/PR via ci.yml; publish re-runs
       # only the fast static gates to keep releases snappy.
 
+      # Idempotency: re-pushing a tag (or a manual publish beating the
+      # workflow to it) must skip, not fail — the registry rejects
+      # overwrites and a red tag looks like a broken release.
+      - name: Check if version already published
+        id: published
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$PKG@$VER already on the registry — skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - run: npm publish --provenance --access public
+        if: steps.published.outputs.exists != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
