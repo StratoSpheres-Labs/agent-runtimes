@@ -6,6 +6,13 @@ import { ClaudeSession } from "./session.js";
 import { runCommand } from "../../src/discovery/run-command.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
 import { assertKnownModel } from "../../src/discovery/models.js";
+import {
+  assertSessionInputsSupported,
+  assertWorkspaceFieldsSupported,
+  normalizeOutputSchema,
+  sanitizeConfigId,
+  sanitizeToolName,
+} from "../../src/definition/session-inputs.js";
 import { discoverMcp } from "../../src/discovery/mcp.js";
 import { discoverSkills, type SkillRoot } from "../../src/discovery/skills.js";
 import type { RuntimeSkill } from "../../src/definition/skill.js";
@@ -115,8 +122,43 @@ export class ClaudeRuntime extends DefaultRuntime {
   }
 
   public override async createSession(options?: CreateSessionOptions): Promise<AgentSession> {
-    const { cwd, model, reasoning, mcpServers, workspace, resumeSessionId, onPermissionRequest } =
-      options ?? {};
+    const {
+      cwd,
+      model,
+      reasoning,
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      mcpServers,
+      workspace,
+      resumeSessionId,
+      onPermissionRequest,
+    } = options ?? {};
+    // Reject inputs this CLI cannot honor before anything spawns: claude
+    // has no token-budget / profile channels and no sandbox flag
+    // (sandboxMode is rejected below). `--agent` / `--append-system-prompt`
+    // / `--max-budget-usd` / `--json-schema` are wired (verified on 2.1.278).
+    assertSessionInputsSupported("claude", claudeDefinition.capabilities, {
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      reasoning,
+    });
+    assertWorkspaceFieldsSupported(
+      "claude",
+      ["allowedPaths", "permissionMode", "dangerouslySkipPermissions"],
+      workspace,
+    );
     // Static fallback is the only catalog claude has — validation is free
     // (no probe) once models() primed it, fail-open otherwise.
     await assertKnownModel(
@@ -125,6 +167,16 @@ export class ClaudeRuntime extends DefaultRuntime {
       claudeDefinition.models?.fallbackModels ?? [],
       () => this.models(),
     );
+    // Fail fast on malformed allowlist entries (buildArgs re-checks per run).
+    const cleanTools = allowedTools?.map((t) => sanitizeToolName(t, "claude"));
+    // Fail fast on hostile MCP server names: they derive `--allowedTools`
+    // entries (`mcp__<name>__*`, space-joined), so a name with spaces or
+    // wildcards would silently widen the grant.
+    mcpServers?.forEach((s) => sanitizeConfigId(s.name, "mcpServer", "claude"));
+    // Fail fast on a malformed agent id (buildArgs re-checks per run).
+    const cleanAgent = sanitizeConfigId(agent, "agent", "claude");
+    // Fail fast on a malformed schema (the normalized string rides argv).
+    const cleanSchema = normalizeOutputSchema(outputSchema, "claude");
     const status = await this.detect();
     const command = status.installed ? status.executable : claudeDefinition.executable.command;
     const sid = `claude_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -134,8 +186,13 @@ export class ClaudeRuntime extends DefaultRuntime {
       cwd,
       model,
       reasoning,
+      agent: cleanAgent,
+      systemPrompt,
+      maxBudgetUsd,
+      outputSchema: cleanSchema,
       mcpServers,
       workspace,
+      allowedTools: cleanTools,
       resumeSessionId,
       onPermissionRequest,
     });

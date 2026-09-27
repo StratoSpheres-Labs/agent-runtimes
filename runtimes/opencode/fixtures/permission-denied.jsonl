@@ -1,0 +1,4 @@
+{"type":"step_start","timestamp":1790410231500,"sessionID":"ses_deny1","part":{"id":"prt_1","sessionID":"ses_deny1","messageID":"msg_1","type":"step-start"}}
+{"type":"tool_use","timestamp":1790410237656,"sessionID":"ses_deny1","part":{"type":"tool","tool":"edit","callID":"call_deny1","state":{"status":"error","input":{"filePath":"note.txt"},"error":"The user rejected permission to use this specific tool call."},"id":"prt_2","sessionID":"ses_deny1","messageID":"msg_2"}}
+{"type":"text","timestamp":1790410238000,"sessionID":"ses_deny1","part":{"id":"prt_3","sessionID":"ses_deny1","messageID":"msg_3","type":"text","text":"I cannot edit the file."}}
+{"type":"step_finish","timestamp":1790410238100,"sessionID":"ses_deny1","part":{"id":"prt_4","sessionID":"ses_deny1","messageID":"msg_3","type":"step-finish","reason":"stop"}}

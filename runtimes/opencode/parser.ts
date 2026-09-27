@@ -1,10 +1,35 @@
-import { JsonlParser } from "../../src/parser/jsonl.js";
+import {
+  JsonlParser,
+  MAX_PARSER_BUFFER_BYTES,
+  bufferOverflowError,
+} from "../../src/parser/jsonl.js";
 import type { RuntimeEvent } from "../../src/events/runtime-event.js";
 import { asJsonValue } from "../../src/events/runtime-event.js";
 import type { RuntimeParser } from "../../src/parser/parser.js";
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Fixed prefixes opencode's permission layer authors into `tool_use`
+ * error strings (before the tool body runs). An explicit deny rule
+ * appends the operator's rule list as JSON after the prefix (dropped —
+ * operator config, not the refusal explanation); a headless reject
+ * (or reject-with-feedback) keeps its full text. Ordinary tool errors
+ * never produce these strings. Shapes cross-checked against independent
+ * third-party stream analysis and captured live on 1.18.32
+ * (`edit: ask` headless → exact REJECT_PREFIX).
+ */
+const DENY_RULE_PREFIX =
+  "The user has specified a rule which prevents you from using this specific tool call.";
+const REJECT_PREFIX = "The user rejected permission to use this specific tool call";
+
+function refusalReason(error: string | undefined): { reason: string; kind: string } | null {
+  if (!error) return null;
+  if (error.startsWith(DENY_RULE_PREFIX)) return { reason: DENY_RULE_PREFIX, kind: "deny" };
+  if (error.startsWith(REJECT_PREFIX)) return { reason: error, kind: "reject" };
+  return null;
 }
 
 /**
@@ -24,6 +49,11 @@ function asString(value: unknown): string | undefined {
  *   {"type":"tool_use","part":{"type":"tool","tool":"bash",
  *     "callID":"call_...","state":{"status":"completed",
  *     "input":{...},"output":"..."}}}                             → tool_started + tool_finished
+ *   {"type":"tool_use",...,"state":{"status":"error",
+ *     "error":"The user rejected permission to use this specific tool call."}}
+ *                                                              → tool_started + tool_finished(error)
+ *                                                                + permission_denied (refusal prefixes
+ *     only — ordinary tool errors never match; verified live on 1.18.32)
  *   Fast tools arrive as ONE completed line (start+finish together);
  *   slow tools as pending/running then completed. A seen-set pairs them so
  *   a finish always has exactly one preceding start with the same id.
@@ -65,7 +95,15 @@ export class OpencodeParser implements RuntimeParser {
     const events: RuntimeEvent[] = [];
     const parts = this.buf.split("\n");
     const complete = isFlush ? parts : parts.slice(0, -1);
-    this.buf = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    const retained = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    if (retained.length > MAX_PARSER_BUFFER_BYTES) {
+      // Newline-less flood: drop the partial (never a valid line at this
+      // size) and say so — memory stays bounded, stream alive.
+      this.buf = "";
+      events.push(bufferOverflowError("OpencodeParser", MAX_PARSER_BUFFER_BYTES));
+    } else {
+      this.buf = retained;
+    }
     for (const raw of complete) {
       const line = raw.trim();
       if (!line) continue;
@@ -141,6 +179,19 @@ export class OpencodeParser implements RuntimeParser {
           output: asJsonValue(state?.["output"] ?? meta?.["output"]),
           error: status === "error" || (exitCode !== undefined && exitCode !== 0),
         });
+        // Permission refusals ride the same envelope (no dedicated channel):
+        // surface the reason as its own event so denials are visible instead
+        // of reason-less tool_finished{error:true}. Kind joins UI filtering.
+        const denial = refusalReason(asString(state?.["error"]));
+        if (denial !== null) {
+          events.push({
+            type: "permission_denied",
+            id,
+            toolName: name === "tool" ? undefined : name,
+            reason: denial.reason,
+            kind: denial.kind,
+          });
+        }
         return events;
       }
       case "tool": {

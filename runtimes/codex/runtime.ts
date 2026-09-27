@@ -16,6 +16,12 @@ import type { AuthMethod, AuthStatus } from "../../src/definition/auth.js";
 import { withStderrTail } from "../../src/definition/auth.js";
 import { runCommand } from "../../src/discovery/run-command.js";
 import { assertKnownModel, rememberLiveModels } from "../../src/discovery/models.js";
+import {
+  assertSessionInputsSupported,
+  assertWorkspaceFieldsSupported,
+  normalizeOutputSchema,
+  sanitizeConfigId,
+} from "../../src/definition/session-inputs.js";
 import { discoverSkills, type SkillRoot } from "../../src/discovery/skills.js";
 import type { RuntimeSkill } from "../../src/definition/skill.js";
 import type { RuntimeModel } from "../../src/definition/model.js";
@@ -63,7 +69,56 @@ export class CodexRuntime extends DefaultRuntime {
   }
 
   public override async createSession(options?: CreateSessionOptions): Promise<AgentSession> {
-    const { cwd, model, reasoning, mcpServers, workspace, resumeSessionId } = options ?? {};
+    const {
+      cwd,
+      model,
+      reasoning,
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      mcpServers,
+      workspace,
+      resumeSessionId,
+    } = options ?? {};
+    // Reject inputs this CLI cannot honor before anything spawns: codex
+    // has no agent / system-prompt / token-budget / cost-budget / allowlist
+    // channels and no permissionMode flag (permissionMode is rejected
+    // below). `--output-schema` is wired (verified on both branches).
+    assertSessionInputsSupported("codex", codexDefinition.capabilities, {
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      reasoning,
+    });
+    assertWorkspaceFieldsSupported(
+      "codex",
+      ["allowedPaths", "sandboxMode", "dangerouslySkipPermissions", "autoReview"],
+      workspace,
+    );
+    // `--approve-for-me` forces workspace-write + on-request review itself;
+    // combining it is a caller bug — fail fast here (buildArgs re-checks).
+    if (workspace?.autoReview === true) {
+      const conflicts: string[] = [];
+      if (workspace.sandboxMode !== undefined) conflicts.push("sandboxMode");
+      if (workspace.dangerouslySkipPermissions === true)
+        conflicts.push("dangerouslySkipPermissions");
+      if (conflicts.length > 0) {
+        throw new RuntimeSessionError(
+          `codex approveForMe conflicts with workspace ${conflicts.join(", ")}: --approve-for-me already forces workspace-write + on-request review`,
+          { runtime: "codex" },
+        );
+      }
+    }
     // Unknown-model gate first (no I/O when unprimed), then the MCP
     // fail-fast, then detect + the CLI-floor preflight below.
     await assertKnownModel(
@@ -95,6 +150,10 @@ export class CodexRuntime extends DefaultRuntime {
         { runtime: "codex" },
       );
     }
+    // Fail fast on a malformed profile id (buildArgs re-checks per run).
+    const cleanProfile = sanitizeConfigId(profile, "profile", "codex");
+    // Fail fast on a malformed schema (the normalized JSON is staged to a file).
+    const cleanSchema = normalizeOutputSchema(outputSchema, "codex");
     // Shim-only installs (win32 npm .cmd, no native exe) run via host node.
     const launch = resolveCodexLaunch(executable);
     const sid = `codex_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -106,6 +165,8 @@ export class CodexRuntime extends DefaultRuntime {
       cwd,
       model,
       reasoning,
+      profile: cleanProfile,
+      outputSchema: cleanSchema,
       workspace,
       resumeSessionId,
     });

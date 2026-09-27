@@ -4,16 +4,22 @@
   type SessionRunOptions,
 } from "../../src/core/session.js";
 import { DefaultRun, type AgentRun } from "../../src/core/run.js";
+import { RuntimeSessionError } from "../../src/core/errors.js";
 import { buildOpencodeArgs, buildOpencodeMcpConfig } from "./definition.js";
 import { OpencodeParser } from "./parser.js";
 import { opencodeDefinition } from "./definition.js";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
+import type { PromptContent } from "../../src/definition/content.js";
+import { splitPromptContent } from "../../src/definition/content.js";
+import { isKnownModel } from "../../src/discovery/models.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
 import { readOpencodeTranscript } from "./transcript.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
+import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
 import { rmSync } from "node:fs";
@@ -31,9 +37,11 @@ export class OpencodeSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly model: string | undefined;
   private readonly reasoning: ReasoningOptions | undefined;
+  private readonly agent: string | undefined;
   public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly stagedImages: string[] = [];
+  private readonly resumeGuard = new NativeIdResumeGuard();
 
   public constructor(options: {
     id: string;
@@ -41,6 +49,7 @@ export class OpencodeSession implements AgentSession {
     cwd?: string;
     model?: string;
     reasoning?: ReasoningOptions;
+    agent?: string;
     mcpServers?: McpServer[];
     workspace?: WorkspaceOptions;
     resumeSessionId?: string;
@@ -50,9 +59,10 @@ export class OpencodeSession implements AgentSession {
     this.cwd = options.cwd;
     this.model = options.model;
     this.reasoning = options.reasoning;
+    this.agent = options.agent;
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
-    this.opencodeSessionId = options.resumeSessionId ?? null;
+    this.opencodeSessionId = sanitizeResumeId(options.resumeSessionId, "opencode") ?? null;
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
@@ -60,23 +70,47 @@ export class OpencodeSession implements AgentSession {
     });
   }
 
-  private createRun(runId: string, prompt: string, runOpts: SessionRunOptions): AgentRun {
+  private createRun(runId: string, prompt: PromptContent, runOpts: SessionRunOptions): AgentRun {
+    this.resumeGuard.noteRunCreated();
+    // No mid-run channel: stdin carries one prompt per process.
+    if (runOpts.allowMidRunInput === true) {
+      throw new RuntimeSessionError(
+        "opencode runs do not support mid-run input (send): stdin carries one prompt per process",
+        { runtime: "opencode" },
+      );
+    }
+    const { text, images: partImages } = splitPromptContent(prompt);
+    // Per-run overrides fall back to the session values; an id unknown to
+    // the primed catalog rejects before anything spawns (fail-open when
+    // the catalog was never surfaced).
+    const model = runOpts.model ?? this.model;
+    if (
+      model !== undefined &&
+      !isKnownModel("opencode", model, opencodeDefinition.models?.fallbackModels ?? [])
+    ) {
+      throw new RuntimeSessionError(
+        `unknown model "${model}" for opencode — not in the live catalog or fallback list`,
+        { runtime: "opencode" },
+      );
+    }
+    const reasoning = runOpts.reasoning ?? this.reasoning;
     const dir = this.cwd ? resolve(this.cwd) : undefined;
     const baseArgs = this.opencodeSessionId
       ? buildOpencodeArgs({
-          model: this.model,
+          model,
           sessionId: this.opencodeSessionId,
-          reasoning: this.reasoning,
+          reasoning,
+          agent: this.agent,
           format: "json",
           dir,
         })
-      : buildOpencodeArgs({ model: this.model, reasoning: this.reasoning, format: "json", dir });
-    const imageFiles =
-      runOpts.images?.map((img) => {
-        const file = stageImageToTempFile(img, this.cwd);
-        if (stagedIsTemp(file, this.cwd)) this.stagedImages.push(file);
-        return file;
-      }) ?? [];
+      : buildOpencodeArgs({ model, reasoning, agent: this.agent, format: "json", dir });
+    const allImages = [...partImages, ...(runOpts.images ?? [])];
+    const imageFiles = allImages.map((img) => {
+      const file = stageImageToTempFile(img, this.cwd);
+      if (stagedIsTemp(file, this.cwd)) this.stagedImages.push(file);
+      return file;
+    });
     const args = [...baseArgs, ...imageFiles.flatMap((f) => ["-f", f])];
     // Shim-aware spawn (win32 npm `.cmd` needs host node); native binaries
     // pass through untouched. Launch env seeds the agent env merge.
@@ -94,7 +128,7 @@ export class OpencodeSession implements AgentSession {
       command: launch.command,
       args: [...launch.prependArgs, ...args],
       cwd: this.cwd,
-      stdinData: prompt,
+      stdinData: text,
       env: Object.keys(env).length > 0 ? env : undefined,
       timeout: runOpts.timeout,
       parser: new OpencodeParser(),
@@ -106,6 +140,7 @@ export class OpencodeSession implements AgentSession {
     run.events = function () {
       return (async function* () {
         for await (const e of origEvents()) {
+          self.resumeGuard.noteEvent(e.type, self.opencodeSessionId !== null);
           if (e.type === "session_started") {
             const sid = (e as { sessionId: string }).sessionId;
             self.opencodeSessionId = sid;
@@ -128,7 +163,8 @@ export class OpencodeSession implements AgentSession {
     return run;
   }
 
-  public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
+  public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
+    this.resumeGuard.assertCanStartRun(this.opencodeSessionId, this.id, "opencode");
     return this.inner.run(prompt, options);
   }
 

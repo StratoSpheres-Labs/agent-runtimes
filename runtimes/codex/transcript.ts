@@ -199,6 +199,17 @@ function foldCodexLine(obj: unknown): TranscriptEntry | null {
   }
 }
 
+/**
+ * Text-block type names drifted across CLI versions: 0.150.1-era rollouts
+ * use `input_text`/`output_text`, 0.156.1 uses `text` (user) / `Text`
+ * (agent) — verified live. Match case-insensitively so both read.
+ */
+function isTextBlock(type: unknown): boolean {
+  if (typeof type !== "string") return false;
+  const t = type.toLowerCase();
+  return t === "input_text" || t === "output_text" || t === "text";
+}
+
 function messageText(item: Record<string, unknown>): string {
   const content = item["content"];
   if (!Array.isArray(content)) return "";
@@ -206,10 +217,7 @@ function messageText(item: Record<string, unknown>): string {
     .map((c) => {
       if (typeof c !== "object" || c === null) return "";
       const r = c as Record<string, unknown>;
-      if (
-        (r["type"] === "input_text" || r["type"] === "output_text") &&
-        typeof r["text"] === "string"
-      ) {
+      if (isTextBlock(r["type"]) && typeof r["text"] === "string") {
         return r["text"];
       }
       return "";

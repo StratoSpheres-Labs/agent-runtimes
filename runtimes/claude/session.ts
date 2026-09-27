@@ -5,16 +5,22 @@ import {
   type SessionRunOptions,
 } from "../../src/core/session.js";
 import { type AgentRun } from "../../src/core/run.js";
+import type { RuntimeEvent } from "../../src/events/runtime-event.js";
 import { ClaudeRun } from "./run.js";
+import { RuntimeSessionError } from "../../src/core/errors.js";
 import {
   buildClaudeArgs,
   buildClaudeMcpAllowedTools,
   buildClaudeStdinPrompt,
+  mergeClaudeAllowedTools,
   writeClaudeMcpConfigFile,
 } from "./definition.js";
 import { ClaudeParser } from "./parser.js";
 import { claudeDefinition } from "./definition.js";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
+import type { PromptContent } from "../../src/definition/content.js";
+import { splitPromptContent } from "../../src/definition/content.js";
+import { isKnownModel } from "../../src/discovery/models.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { normalizeWorkspaceAllowedPaths } from "../../src/definition/workspace.js";
@@ -23,6 +29,8 @@ import type { HistoryOptions, TranscriptEntry } from "../../src/definition/trans
 import { readClaudeTranscript } from "./transcript.js";
 import { imageToBase64 } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
+import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
 
@@ -40,10 +48,16 @@ export class ClaudeSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly model: string | undefined;
   private readonly reasoning: ReasoningOptions | undefined;
+  private readonly agent: string | undefined;
+  private readonly systemPrompt: string | undefined;
+  private readonly maxBudgetUsd: number | undefined;
+  private readonly outputSchema: string | undefined;
   public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
+  private readonly allowedTools: string[] | undefined;
   private readonly onPermissionRequest: PermissionHandler | undefined;
   private mcpConfigFile: string | null = null;
+  private readonly resumeGuard = new NativeIdResumeGuard();
 
   public constructor(options: {
     id: string;
@@ -51,8 +65,13 @@ export class ClaudeSession implements AgentSession {
     cwd?: string;
     model?: string;
     reasoning?: ReasoningOptions;
+    agent?: string;
+    systemPrompt?: string;
+    maxBudgetUsd?: number;
+    outputSchema?: string;
     mcpServers?: McpServer[];
     workspace?: WorkspaceOptions;
+    allowedTools?: string[];
     resumeSessionId?: string;
     onPermissionRequest?: PermissionHandler;
   }) {
@@ -61,9 +80,14 @@ export class ClaudeSession implements AgentSession {
     this.cwd = options.cwd;
     this.model = options.model;
     this.reasoning = options.reasoning;
+    this.agent = options.agent;
+    this.systemPrompt = options.systemPrompt;
+    this.maxBudgetUsd = options.maxBudgetUsd;
+    this.outputSchema = options.outputSchema;
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
-    this.claudeSessionId = options.resumeSessionId ?? null;
+    this.allowedTools = options.allowedTools;
+    this.claudeSessionId = sanitizeResumeId(options.resumeSessionId, "claude") ?? null;
     this.onPermissionRequest = options.onPermissionRequest;
     this.inner = new DefaultSession({
       id: options.id,
@@ -72,22 +96,51 @@ export class ClaudeSession implements AgentSession {
     });
   }
 
-  private createRun(runId: string, prompt: string, runOpts: SessionRunOptions): AgentRun {
+  private createRun(runId: string, prompt: PromptContent, runOpts: SessionRunOptions): AgentRun {
     // NOTE: no argv prompt 鈥?stream-json input reads stdin only.
     // MCP sessions pre-approve exactly their own servers' tools so headless
     // turns can call them (least privilege 鈥?no bypassPermissions).
+    this.resumeGuard.noteRunCreated();
+    // No mid-run channel: print mode consumes only the initial stdin
+    // prompt (verified live — follow-up envelopes are never processed).
+    if (runOpts.allowMidRunInput === true) {
+      throw new RuntimeSessionError(
+        "claude runs do not support mid-run input (send): print mode consumes only the initial stdin prompt",
+        { runtime: "claude" },
+      );
+    }
     const mcpServers =
       this.mcpServers !== undefined && this.mcpServers.length > 0 ? this.mcpServers : undefined;
+    const { text, images: partImages } = splitPromptContent(prompt);
+    const model = runOpts.model ?? this.model;
+    if (
+      model !== undefined &&
+      !isKnownModel("claude", model, claudeDefinition.models?.fallbackModels ?? [])
+    ) {
+      throw new RuntimeSessionError(
+        `unknown model "${model}" for claude — not in the live catalog or fallback list`,
+        { runtime: "claude" },
+      );
+    }
+    const reasoning = runOpts.reasoning ?? this.reasoning;
     const allowedPaths = normalizeWorkspaceAllowedPaths(this.workspace?.allowedPaths, this.cwd);
-    const images = runOpts.images?.map((img) => imageToBase64(img, this.cwd));
+    const allImages = [...partImages, ...(runOpts.images ?? [])];
+    const images = allImages.map((img) => imageToBase64(img, this.cwd));
     const base = {
-      model: this.model,
-      reasoning: this.reasoning,
+      model,
+      reasoning,
+      agent: this.agent,
+      systemPrompt: this.systemPrompt,
+      maxBudgetUsd: this.maxBudgetUsd,
+      outputSchema: this.outputSchema,
       addDirs: allowedPaths.length > 0 ? allowedPaths : undefined,
       permissionMode: this.workspace?.permissionMode,
       dangerouslySkipPermissions: this.workspace?.dangerouslySkipPermissions,
       mcpConfigFile: this.ensureMcpConfig(),
-      allowedTools: mcpServers ? buildClaudeMcpAllowedTools(mcpServers) : undefined,
+      allowedTools: mergeClaudeAllowedTools(
+        this.allowedTools,
+        mcpServers ? buildClaudeMcpAllowedTools(mcpServers) : undefined,
+      ),
     };
     const args = this.claudeSessionId
       ? buildClaudeArgs({ ...base, resumeId: this.claudeSessionId })
@@ -101,7 +154,7 @@ export class ClaudeSession implements AgentSession {
       args: [...launch.prependArgs, ...args],
       cwd: this.cwd,
       env: buildAgentEnv("claude", launch.env ?? process.env),
-      stdinData: buildClaudeStdinPrompt(prompt, images),
+      stdinData: buildClaudeStdinPrompt(text, images.length > 0 ? images : undefined),
       timeout: runOpts.timeout,
       parser: new ClaudeParser(),
       keepStdinOpen: this.onPermissionRequest !== undefined,
@@ -113,6 +166,7 @@ export class ClaudeSession implements AgentSession {
     run.events = function () {
       return (async function* () {
         for await (const e of origEvents()) {
+          self.resumeGuard.noteEvent(e.type, self.claudeSessionId !== null);
           if (e.type === "session_started") {
             const sid = (e as { sessionId: string }).sessionId;
             self.claudeSessionId = sid;
@@ -148,8 +202,16 @@ export class ClaudeSession implements AgentSession {
               if (run.respondToPermission !== undefined) {
                 await run.respondToPermission(req.id, ans.optionId);
               }
-            } catch (_e: unknown) {
-              String(_e);
+            } catch (err: unknown) {
+              // W5: a failed answer must be visible — otherwise the caller
+              // believes they answered while the turn stalls. The request
+              // itself is still yielded below so the consumer sees both.
+              const message = err instanceof Error ? err.message : String(err);
+              const failed: RuntimeEvent = {
+                type: "error",
+                error: { code: "PERMISSION_ANSWER_FAILED", message },
+              };
+              yield failed;
             }
           }
           yield e;
@@ -171,7 +233,8 @@ export class ClaudeSession implements AgentSession {
     return this.mcpConfigFile;
   }
 
-  public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
+  public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
+    this.resumeGuard.assertCanStartRun(this.claudeSessionId, this.id, "claude");
     return this.inner.run(prompt, options);
   }
 

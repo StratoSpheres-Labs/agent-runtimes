@@ -5,6 +5,7 @@ import type { RuntimeDefinition } from "../../src/definition/index.js";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import { sanitizeModelId } from "../../src/definition/model.js";
+import { sanitizeConfigId, sanitizeToolName } from "../../src/definition/session-inputs.js";
 import { RuntimeSessionError } from "../../src/core/errors.js";
 
 /**
@@ -44,14 +45,35 @@ export const claudeDefinition: RuntimeDefinition = {
     modelSelection: true,
     reasoning: true,
     images: true,
+    // --add-dir / --permission-mode / --dangerously-skip-permissions are
+    // wired; sandboxMode has no claude flag and is rejected loudly.
     workspace: true,
+    // `--agent <name>` (verified in `claude -p --help` on 2.1.278).
+    agentSelection: true,
+    // Print mode consumes only the initial stdin prompt: follow-up
+    // envelopes are accepted by the pipe but never processed (verified
+    // live, 3 runs on 2.1.278 — text-only control included). Interactive
+    // answers stay available via respondToPermission (explicit turn pause).
+    midRunInput: false,
+    historySeed: false,
+    // `--append-system-prompt` (verified on 2.1.278; append, never replace).
+    systemPrompt: true,
+    // No verified max-tokens channel — wire only observed flags.
+    maxTokens: false,
+    // `--max-budget-usd` (verified on 2.1.278; spend, not tokens).
+    costBudget: true,
+    // `--json-schema` inline (verified on 2.1.278).
+    structuredOutput: true,
+    // Caller --allowedTools merged with the MCP-derived grants.
+    toolAllowlist: true,
+    profileSelection: false,
   },
   session: {
     persistent: true,
   },
   // Verified installs only (live runs + fixture provenance in comments).
   versionPolicy: {
-    tested: ["2.1.112", "2.1.187"],
+    tested: ["2.1.112", "2.1.187", "2.1.278", "2.1.283"],
   },
   models: {
     // NOTE: no listCommand — `claude` has no list-models subcommand
@@ -82,6 +104,29 @@ export type ClaudeBuildArgsOptions = {
   addDirs?: string[];
   permissionMode?: string;
   dangerouslySkipPermissions?: boolean;
+  /**
+   * Named session agent (`--agent <name>`, verified on 2.1.278:
+   * "Agent for the current session"). Sanitized like model ids.
+   */
+  agent?: string;
+  /**
+   * Appended system prompt (`--append-system-prompt`, verified on
+   * 2.1.278). Append, never `--system-prompt` replace — the default
+   * prompt stays intact. Omit when blank.
+   */
+  systemPrompt?: string;
+  /**
+   * Cost budget in USD (`--max-budget-usd`, verified on 2.1.278).
+   * Spend cap, not a token count — validated positive-finite at the
+   * session boundary, passed through verbatim here.
+   */
+  maxBudgetUsd?: number;
+  /**
+   * Normalized schema JSON (`--json-schema <schema>`, verified on
+   * 2.1.278). Carried inline on argv — normalized + byte-capped at the
+   * session boundary, passed through verbatim here.
+   */
+  outputSchema?: string;
   /**
    * Unified reasoning knob (Phase 17) — maps to `--effort <level>`.
    * Verified on Claude Code 2.1.112 (`claude --help`):
@@ -146,12 +191,30 @@ export function buildClaudeArgs(options: ClaudeBuildArgsOptions = {}): string[] 
   if (options.permissionMode) {
     args.push("--permission-mode", options.permissionMode);
   }
+  // Agent ids ride argv (`--agent <name>`) — same injection class as models.
+  const agent = sanitizeConfigId(options.agent, "agent", "claude");
+  if (agent) args.push("--agent", agent);
+  // System prompt travels as a value (never a flag position); blank means
+  // "no system prompt" (flag omitted, never an error).
+  if (options.systemPrompt !== undefined && options.systemPrompt.trim().length > 0) {
+    args.push("--append-system-prompt", options.systemPrompt);
+  }
+  // Budget travels as a value too. Shape-checked at the session boundary;
+  // String() keeps fractional dollars (e.g. 0.5) intact.
+  if (options.maxBudgetUsd !== undefined) {
+    args.push("--max-budget-usd", String(options.maxBudgetUsd));
+  }
+  if (options.outputSchema !== undefined) {
+    args.push("--json-schema", options.outputSchema);
+  }
   if (options.dangerouslySkipPermissions) {
     args.push("--dangerously-skip-permissions");
   }
   if (options.allowedTools && options.allowedTools.length > 0) {
     // `--allowedTools <tools...>`: comma- or space-separated (claude --help).
-    args.push("--allowedTools", options.allowedTools.join(" "));
+    // Every entry is sanitized — a dropped entry would silently widen access.
+    const clean = options.allowedTools.map((t) => sanitizeToolName(t, "claude"));
+    args.push("--allowedTools", clean.join(" "));
   }
   if (options.mcpConfigFile) {
     args.push("--mcp-config", options.mcpConfigFile);
@@ -213,6 +276,25 @@ export function buildClaudeMcpConfig(servers: McpServer[]): string {
  */
 export function buildClaudeMcpAllowedTools(servers: McpServer[]): string[] {
   return servers.map((s) => `mcp__${s.name}__*`);
+}
+
+/**
+ * Merge caller-supplied tools with MCP-derived grants (deduped, caller
+ * first). Either side may be absent; both absent yields undefined (no flag).
+ */
+export function mergeClaudeAllowedTools(
+  manual: string[] | undefined,
+  derived: string[] | undefined,
+): string[] | undefined {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const t of [...(manual ?? []), ...(derived ?? [])]) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /**

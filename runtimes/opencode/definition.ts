@@ -21,6 +21,10 @@ export const opencodeDefinition: RuntimeDefinition = {
     // Daemon tries the standalone binary first (`bin: opencode-cli`).
     aliases: ["opencode-cli"],
     versionArgs: ["--version"],
+    // Run flags (`--agent`, `--dir`, `--session`) only appear under
+    // `opencode run --help`, never in the top-level help (same shape as
+    // claude's `claude -p --help`) — probe there for flag inventory.
+    helpArgs: ["run", "--help"],
     // npm-global bundle + bun installs outside PATH (win32); `~` expands
     // against the user home, missing entries are skipped downstream.
     extraProbePaths: [
@@ -41,7 +45,23 @@ export const opencodeDefinition: RuntimeDefinition = {
     modelSelection: true,
     reasoning: true,
     images: true,
-    workspace: true,
+    // No native flag: --dir pins one cwd, but extra allowedPaths /
+    // permission / sandbox modes have no channel (verified against
+    // `opencode run --help`). workspace inputs are rejected loudly.
+    workspace: false,
+    // `opencode run --agent <name>` (verified in --help).
+    agentSelection: true,
+    // stdin carries one prompt per process — no mid-run channel.
+    midRunInput: false,
+    historySeed: false,
+    systemPrompt: false,
+    maxTokens: false,
+    // No cost-budget flag on `opencode run` (verified in --help).
+    costBudget: false,
+    // No schema flag on `opencode run` (verified in --help).
+    structuredOutput: false,
+    toolAllowlist: false,
+    profileSelection: false,
   },
   session: {
     persistent: true,
@@ -50,11 +70,11 @@ export const opencodeDefinition: RuntimeDefinition = {
   // across 1.18.x — only list what live runs actually saw. Extend when a
   // real incompatibility is observed, not sooner.
   versionPolicy: {
-    tested: ["1.18.27", "1.18.30", "1.18.31"],
+    tested: ["1.18.27", "1.18.30", "1.18.31", "1.18.32"],
   },
   models: {
     fallbackModels: [
-      { id: "opencode/mimo-v2.5-free", provider: "opencode", name: "Mimo v2.5 Free" },
+      { id: "opencode/mimo-v2.6-flash-free", provider: "opencode", name: "Mimo v2.6 Flash Free" },
       {
         id: "opencode/muse-spark-1.2-contributor-free",
         provider: "opencode",
@@ -122,8 +142,9 @@ export function buildOpencodeArgs(options: OpencodeBuildArgsOptions = {}): strin
       args.push("--variant", variant);
     }
   }
-  if (options.agent) {
-    args.push("--agent", options.agent);
+  if (options.agent !== undefined) {
+    const agent = sanitizeOpencodeAgent(options.agent, "opencode");
+    if (agent !== undefined) args.push("--agent", agent);
   }
   if (options.dir) {
     args.push("--dir", options.dir);
@@ -142,6 +163,26 @@ function sanitizeOpencodeVariant(variant: string, runtime: string): string {
   const trimmed = variant.trim();
   if (!OPENCODE_VARIANT_ID.test(trimmed)) {
     throw new RuntimeSessionError(`invalid opencode variant id: ${JSON.stringify(variant)}`, {
+      runtime,
+    });
+  }
+  return trimmed;
+}
+
+/**
+ * Agent ids ride argv too (`--agent <name>`) — same injection class as
+ * model ids. Undefined/blank means "agent not selected" (flag omitted,
+ * never an error); anything outside the CLI's key shape throws.
+ */
+export function sanitizeOpencodeAgent(
+  agent: string | undefined,
+  runtime: string,
+): string | undefined {
+  if (agent === undefined) return undefined;
+  const trimmed = agent.trim();
+  if (trimmed.length === 0) return undefined;
+  if (!OPENCODE_VARIANT_ID.test(trimmed)) {
+    throw new RuntimeSessionError(`invalid opencode agent id: ${JSON.stringify(agent)}`, {
       runtime,
     });
   }

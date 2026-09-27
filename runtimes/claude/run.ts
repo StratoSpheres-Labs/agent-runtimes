@@ -26,4 +26,11 @@ export class ClaudeRun extends DefaultRun {
   public async respondToPermission(id: string, optionId: string): Promise<void> {
     await this.writeStdin(buildClaudePermissionAnswer(id, optionId));
   }
+
+  // NOTE: no send() override — verified live (3 runs, 2.1.278) that print
+  // mode consumes only the initial stdin prompt: follow-up envelopes are
+  // accepted by the pipe but never processed (exact-30-word control +
+  // text-only control both ignored). Interactive answers keep working via
+  // respondToPermission (the turn explicitly pauses for tool_result —
+  // a different mechanism). The base rejects send() loudly.
 }

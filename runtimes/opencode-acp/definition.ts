@@ -36,6 +36,17 @@ export const opencodeAcpDefinition: RuntimeDefinition = {
     reasoning: false,
     images: true,
     workspace: false,
+    agentSelection: false,
+    // Follow-up turns ride `session/prompt` on the live session (AcpRun.send).
+    midRunInput: true,
+    historySeed: false,
+    systemPrompt: false,
+    maxTokens: false,
+    costBudget: false,
+    // No schema param on session/new or session/prompt.
+    structuredOutput: false,
+    toolAllowlist: false,
+    profileSelection: false,
   },
   // Sessions span runs (resume replays the durable id); each run still
   // spawns a fresh `opencode acp` process (Session !== Process).

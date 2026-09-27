@@ -1,4 +1,8 @@
-import { JsonlParser } from "../../src/parser/jsonl.js";
+import {
+  JsonlParser,
+  MAX_PARSER_BUFFER_BYTES,
+  bufferOverflowError,
+} from "../../src/parser/jsonl.js";
 import type { RuntimeEvent } from "../../src/events/runtime-event.js";
 import { asJsonValue } from "../../src/events/runtime-event.js";
 import type { RuntimeParser } from "../../src/parser/parser.js";
@@ -15,11 +19,19 @@ function asString(value: unknown): string | undefined {
  *  {"type":"assistant","message":{"content":[{"type":"thinking",
  *    "thinking":"..."}]}} → reasoning_delta (empty → dropped)
  *  {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"...","input":{}}]}} → tool_started
+ *  {"type":"assistant",...{"type":"tool_use","name":"StructuredOutput",
+ *    "input":{...}}} → text_delta (JSON.stringify of the input — the
+ *    constrained answer lives here under `--json-schema`; the following
+ *    user envelope still yields the single tool_finished, mirroring the
+ *    codex agent_message pattern, never a duplicate)
  *  {"type":"tool_result","tool_use_id":"...","content":"..."} → tool_finished
  *  {"type":"user","message":{"content":[{"type":"tool_result",...}]}} → tool_finished
  *    (print mode delivers tool results inside a `user` transcript envelope —
  *    verified live on 2.1.187; other user-envelope blocks are ignored, not errored)
  *  {"type":"result","subtype":"success"|"error"} → done
+ *  {"type":"system","subtype":"permission_denied",...} → permission_denied
+ *    (verified live on 2.1.278 — harness tool gates auto-decide in print
+ *    mode; the event carries the reason, nothing to answer)
  *  {"type":"system",...} (init / hook_* envelopes) → ignored (transport
  *    metadata, not events; surfacing them as errors spams every run).
  *
@@ -56,7 +68,15 @@ export class ClaudeParser implements RuntimeParser {
     const events: RuntimeEvent[] = [];
     const parts = this.buf.split("\n");
     const complete = isFlush ? parts : parts.slice(0, -1);
-    this.buf = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    const retained = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    if (retained.length > MAX_PARSER_BUFFER_BYTES) {
+      // Newline-less flood: drop the partial (never a valid line at this
+      // size) and say so — memory stays bounded, stream alive.
+      this.buf = "";
+      events.push(bufferOverflowError("ClaudeParser", MAX_PARSER_BUFFER_BYTES));
+    } else {
+      this.buf = retained;
+    }
     for (const raw of complete) {
       const line = raw.trim();
       if (!line) continue;
@@ -98,6 +118,18 @@ export class ClaudeParser implements RuntimeParser {
             } else if (b["type"] === "tool_use") {
               const name = asString(b["name"]) ?? "tool";
               const id = asString(b["id"]) ?? "tool_0";
+              // Structured output answers live in the tool input (verified
+              // live on 2.1.278 with `--json-schema`): surface the JSON as
+              // text so `session.run()` callers can JSON.parse the turn.
+              // No tool events here — the user envelope below still emits
+              // the single paired tool_finished.
+              if (name === "StructuredOutput") {
+                const input = b["input"];
+                if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+                  events.push({ type: "text_delta", text: JSON.stringify(input) });
+                  continue;
+                }
+              }
               if (name === "AskUserQuestion") {
                 const input = b["input"] as Record<string, unknown> | undefined;
                 const questions =
@@ -210,10 +242,24 @@ export class ClaudeParser implements RuntimeParser {
       }
       case "system": {
         // Transport metadata (hook_started, hook_response, …) — ignore,
-        // except `init`, which carries the native session id for resume.
-        if (asString(rec["subtype"]) === "init") {
+        // except `init`, which carries the native session id for resume,
+        // and `permission_denied`, which is the only visible trace of a
+        // harness tool gate (already decided — reason only, no answer).
+        const subtype = asString(rec["subtype"]);
+        if (subtype === "init") {
           const sid = asString(rec["session_id"]);
           if (sid) return [{ type: "session_started", sessionId: sid }];
+        }
+        if (subtype === "permission_denied") {
+          return [
+            {
+              type: "permission_denied",
+              id: asString(rec["tool_use_id"]) ?? "tool_0",
+              toolName: asString(rec["tool_name"]),
+              reason: asString(rec["decision_reason"]) ?? asString(rec["message"]),
+              kind: asString(rec["decision_reason_type"]),
+            },
+          ];
         }
         return [];
       }

@@ -4,12 +4,15 @@
   type SessionRunOptions,
 } from "../../src/core/session.js";
 import { DefaultRun, type AgentRun } from "../../src/core/run.js";
-import { buildCodexArgs } from "./definition.js";
+import { buildCodexArgs, writeCodexSchemaFile } from "./definition.js";
 import { CodexParser } from "./parser.js";
 import { codexDefinition } from "./definition.js";
 import { RuntimeSessionError } from "../../src/core/errors.js";
 import { resolve } from "node:path";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
+import type { PromptContent } from "../../src/definition/content.js";
+import { splitPromptContent } from "../../src/definition/content.js";
+import { isKnownModel } from "../../src/discovery/models.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
 import { readCodexTranscript } from "./transcript.js";
@@ -17,6 +20,8 @@ import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { normalizeWorkspaceAllowedPaths } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
+import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
 import { rmSync } from "node:fs";
 
@@ -37,9 +42,13 @@ export class CodexSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly model: string | undefined;
   private readonly reasoning: ReasoningOptions | undefined;
+  private readonly profile: string | undefined;
+  private readonly outputSchema: string | undefined;
   public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly stagedImages: string[] = [];
+  private schemaConfigFile: string | null = null;
+  private readonly resumeGuard = new NativeIdResumeGuard();
 
   public constructor(options: {
     id: string;
@@ -49,6 +58,8 @@ export class CodexSession implements AgentSession {
     cwd?: string;
     model?: string;
     reasoning?: ReasoningOptions;
+    profile?: string;
+    outputSchema?: string;
     mcpServers?: McpServer[];
     workspace?: WorkspaceOptions;
     resumeSessionId?: string;
@@ -60,9 +71,11 @@ export class CodexSession implements AgentSession {
     this.cwd = options.cwd;
     this.model = options.model;
     this.reasoning = options.reasoning;
+    this.profile = options.profile;
+    this.outputSchema = options.outputSchema;
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
-    this.codexThreadId = options.resumeSessionId ?? null;
+    this.codexThreadId = sanitizeResumeId(options.resumeSessionId, "codex") ?? null;
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
@@ -70,8 +83,9 @@ export class CodexSession implements AgentSession {
     });
   }
 
-  private createRun(runId: string, prompt: string, runOpts: SessionRunOptions): AgentRun {
-    // Phase 21: the codex CLI has no MCP wiring 鈥?fail loudly instead of
+  private createRun(runId: string, prompt: PromptContent, runOpts: SessionRunOptions): AgentRun {
+    this.resumeGuard.noteRunCreated();
+    // Phase 21: the codex CLI has no MCP wiring — fail loudly instead of
     // silently dropping the caller's servers (never ignore mcpServers).
     if (this.mcpServers !== undefined && this.mcpServers.length > 0) {
       throw new RuntimeSessionError(
@@ -79,21 +93,56 @@ export class CodexSession implements AgentSession {
         { runtime: "codex" },
       );
     }
-    const imageFiles =
-      runOpts.images?.map((img) => {
-        const file = stageImageToTempFile(img, this.cwd);
-        if (stagedIsTemp(file, this.cwd)) this.stagedImages.push(file);
-        return file;
-      }) ?? [];
+    // No mid-run channel: stdin carries one prompt per exec.
+    if (runOpts.allowMidRunInput === true) {
+      throw new RuntimeSessionError(
+        "codex runs do not support mid-run input (send): stdin carries one prompt per exec",
+        { runtime: "codex" },
+      );
+    }
+    const { text, images: partImages } = splitPromptContent(prompt);
+    const model = runOpts.model ?? this.model;
+    if (
+      model !== undefined &&
+      !isKnownModel("codex", model, codexDefinition.models?.fallbackModels ?? [])
+    ) {
+      throw new RuntimeSessionError(
+        `unknown model "${model}" for codex — not in the live catalog or fallback list`,
+        { runtime: "codex" },
+      );
+    }
+    const reasoning = runOpts.reasoning ?? this.reasoning;
+    const allImages = [...partImages, ...(runOpts.images ?? [])];
+    const imageFiles = allImages.map((img) => {
+      const file = stageImageToTempFile(img, this.cwd);
+      if (stagedIsTemp(file, this.cwd)) this.stagedImages.push(file);
+      return file;
+    });
+    // cwd / addDirs / profile / approveForMe are create-only
+    // (`exec resume` rejects them): a resumed thread carries the
+    // dirs/profile/review mode granted at creation.
+    const createOnly =
+      this.codexThreadId !== null
+        ? { cwd: undefined, addDirs: undefined, profile: undefined, approveForMe: undefined }
+        : {
+            cwd: this.cwd ? resolve(this.cwd) : undefined,
+            addDirs: normalizeWorkspaceAllowedPaths(this.workspace?.allowedPaths, this.cwd),
+            profile: this.profile,
+            approveForMe: this.workspace?.autoReview,
+          };
     const args = [
       ...this.prependArgs,
       ...buildCodexArgs({
-        model: this.model,
-        reasoning: this.reasoning,
+        model,
+        reasoning,
         resumeThreadId: this.codexThreadId ?? undefined,
-        cwd: this.cwd ? resolve(this.cwd) : undefined,
-        addDirs: normalizeWorkspaceAllowedPaths(this.workspace?.allowedPaths, this.cwd),
+        cwd: createOnly.cwd,
+        addDirs: createOnly.addDirs,
         sandboxMode: this.workspace?.sandboxMode,
+        dangerouslySkipPermissions: this.workspace?.dangerouslySkipPermissions,
+        approveForMe: createOnly.approveForMe,
+        profile: createOnly.profile,
+        outputSchemaFile: this.ensureSchemaFile(),
         images: imageFiles.length > 0 ? imageFiles : undefined,
       }),
     ];
@@ -102,7 +151,7 @@ export class CodexSession implements AgentSession {
       command: this.command || codexDefinition.executable.command,
       args,
       cwd: this.cwd,
-      stdinData: prompt,
+      stdinData: text,
       env,
       timeout: runOpts.timeout,
       parser: new CodexParser(),
@@ -114,6 +163,7 @@ export class CodexSession implements AgentSession {
     run.events = function () {
       return (async function* () {
         for await (const e of origEvents()) {
+          self.resumeGuard.noteEvent(e.type, self.codexThreadId !== null);
           if (e.type === "session_started") {
             const sid = (e as { sessionId: string }).sessionId;
             self.codexThreadId = sid;
@@ -136,7 +186,21 @@ export class CodexSession implements AgentSession {
     return run;
   }
 
-  public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
+  /**
+   * Lazily stage the `--output-schema` temp file on first run (never for
+   * sessions without a schema). Returns undefined when no schema was
+   * configured. The file is deleted on close.
+   */
+  private ensureSchemaFile(): string | undefined {
+    if (!this.outputSchema) return undefined;
+    if (!this.schemaConfigFile) {
+      this.schemaConfigFile = writeCodexSchemaFile(this.outputSchema, this.id);
+    }
+    return this.schemaConfigFile;
+  }
+
+  public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
+    this.resumeGuard.assertCanStartRun(this.codexThreadId, this.id, "codex", "thread");
     return this.inner.run(prompt, options);
   }
 
@@ -161,6 +225,15 @@ export class CodexSession implements AgentSession {
         rmSync(f, { force: true });
       } catch (_e: unknown) {
         String(_e);
+      }
+    }
+    if (this.schemaConfigFile) {
+      try {
+        rmSync(this.schemaConfigFile, { force: true });
+      } catch (_e: unknown) {
+        String(_e);
+      } finally {
+        this.schemaConfigFile = null;
       }
     }
     return this.inner.close();

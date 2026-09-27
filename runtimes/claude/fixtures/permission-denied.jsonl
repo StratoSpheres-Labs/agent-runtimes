@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_deny1","name":"Write","input":{"file_path":"C:\\Temp\\outside.txt","content":"HELLO"}}]}}
+{"type":"system","subtype":"permission_denied","tool_name":"Write","tool_use_id":"toolu_deny1","decision_reason_type":"safetyCheck","decision_reason":"Claude requested permissions to write outside the working directory, which requires manual approval.","message":"Claude requested permissions to write outside the working directory, which requires manual approval.","uuid":"f27f006c-7cc7-49c1-9a01-a164ef4c4361","session_id":"fa5274b9-72ef-b322-f18b2e10255e"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_deny1","content":"Permission denied"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I could not write the file."}]}}
+{"type":"result","subtype":"success"}

@@ -8,6 +8,10 @@ import { OpencodeAcpSession } from "./session.js";
 import { probeOpencodeAuth } from "../opencode/runtime.js";
 import { discoverMcp } from "../../src/discovery/mcp.js";
 import type { McpServerInfo } from "../../src/definition/mcp.js";
+import {
+  assertSessionInputsSupported,
+  assertWorkspaceFieldsSupported,
+} from "../../src/definition/session-inputs.js";
 
 export class OpencodeAcpRuntime extends DefaultRuntime {
   public constructor() {
@@ -19,8 +23,39 @@ export class OpencodeAcpRuntime extends DefaultRuntime {
   }
 
   public override async createSession(options?: CreateSessionOptions): Promise<AgentSession> {
-    const { cwd, model, mcpServers, workspace, onPermissionRequest, resumeSessionId } =
-      options ?? {};
+    const {
+      cwd,
+      model,
+      reasoning,
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      mcpServers,
+      workspace,
+      onPermissionRequest,
+      resumeSessionId,
+    } = options ?? {};
+    // Reject inputs with no ACP channel before anything spawns: no
+    // reasoning / agent / system-prompt / token-budget / cost-budget /
+    // schema / profile / allowlist channels exist, and workspace has no
+    // native flag.
+    assertSessionInputsSupported("opencode-acp", opencodeAcpDefinition.capabilities, {
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      reasoning,
+    });
+    assertWorkspaceFieldsSupported("opencode-acp", [], workspace);
     await assertKnownModel(
       opencodeAcpDefinition.identity.id,
       model,

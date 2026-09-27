@@ -1,5 +1,7 @@
 import type { RuntimeDefinition } from "../../src/definition/index.js";
 import type { ReasoningOptions } from "../../src/definition/reasoning.js";
+import { sanitizeConfigId } from "../../src/definition/session-inputs.js";
+import { floorsFor } from "../../src/definition/compat.js";
 import type { RuntimeModel } from "../../src/definition/model.js";
 import type { McpServerInfo } from "../../src/definition/mcp.js";
 import type { RuntimePlugin } from "../../src/definition/plugin.js";
@@ -8,8 +10,8 @@ import { RuntimeSessionError } from "../../src/core/errors.js";
 import type { ResolvedLaunch } from "../../src/discovery/launch.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
 import { compareSemver, parseSemver } from "../../src/discovery/version.js";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -28,6 +30,10 @@ export const codexDefinition: RuntimeDefinition = {
   executable: {
     command: "codex",
     versionArgs: ["--version"],
+    // Exec flags (`--add-dir`, `-p`, `--sandbox`) only appear under
+    // `codex exec --help`, never in the top-level help (same shape as
+    // claude's `claude -p --help`) — probe there for flag inventory.
+    helpArgs: ["exec", "--help"],
     // The Codex desktop app (macOS bundle id `com.openai.codex`) ships the
     // CLI inside its app bundle without adding it to PATH unless the user
     // runs "Install command line tool". Last-resort fallback below PATH —
@@ -52,7 +58,24 @@ export const codexDefinition: RuntimeDefinition = {
     modelSelection: true,
     reasoning: true,
     images: true,
+    // --add-dir / --sandbox (+ resume -c equivalents) and
+    // --dangerously-bypass-approvals-and-sandbox are wired; permissionMode
+    // has no codex flag and is rejected loudly.
     workspace: true,
+    agentSelection: false,
+    // stdin carries one prompt per exec — no mid-run channel.
+    midRunInput: false,
+    historySeed: false,
+    // No verified -c keys for system instructions / token budgets.
+    systemPrompt: false,
+    maxTokens: false,
+    // No cost-budget flag on `codex exec` (verified in --help).
+    costBudget: false,
+    // `--output-schema <FILE>` (verified on create + resume branches).
+    structuredOutput: true,
+    toolAllowlist: false,
+    // `-p/--profile` (verified in `codex exec --help`).
+    profileSelection: true,
   },
   session: {
     persistent: true,
@@ -62,7 +85,7 @@ export const codexDefinition: RuntimeDefinition = {
     // <0.143.0 rejecting ChatGPT-backed models (e.g. gpt-5.6-terra) that
     // 0.143.0+ starts fine. Tested = this library's verified installs.
     minimum: "0.143.0",
-    tested: ["0.150.1"],
+    tested: ["0.150.1", "0.156.1", "0.157.1"],
   },
   models: {
     // No static fallback: the shipped list goes stale fast (and a wrong
@@ -77,8 +100,31 @@ export type CodexBuildArgsOptions = {
   resumeThreadId?: string;
   /** Session cwd pinned via `-C` on create (daemon parity; resume rejects `-C`). */
   cwd?: string;
+  /** Extra writable roots via `--add-dir` on create (resume rejects it). */
   addDirs?: string[];
   sandboxMode?: string;
+  /**
+   * Config profile via `-p/--profile` on create (layers
+   * `$CODEX_HOME/<name>.config.toml`). Create-only: `exec resume` has no
+   * `-p` flag, so resume + profile rejects loudly.
+   */
+  profile?: string;
+  /**
+   * Unified dangerous opt-in — maps to
+   * `--dangerously-bypass-approvals-and-sandbox` (verified on both
+   * branches of `codex exec --help`).
+   */
+  dangerouslySkipPermissions?: boolean;
+  /**
+   * Route approval requests through automatic review (`--approve-for-me`,
+   * verified in `codex exec --help`: reviewer agent + forced
+   * `workspace-write` + `on-request` policy). Approval delegation, not a
+   * permission grant — sandbox boundaries stay intact. Create-only
+   * (`exec resume` has no such flag). Mutually exclusive with
+   * `sandboxMode` and `dangerouslySkipPermissions` (the CLI rejects the
+   * combination, so this throws first with a readable error).
+   */
+  approveForMe?: boolean;
   /** Unified reasoning knob (Phase 17) — maps to `-c model_reasoning_effort=`. */
   reasoning?: ReasoningOptions;
   /**
@@ -95,6 +141,12 @@ export type CodexBuildArgsOptions = {
   disablePlugins?: boolean;
   /** Phase 26: image files to attach via `-i` (must precede threadId on resume). */
   images?: string[];
+  /**
+   * Staged schema file for `--output-schema` (verified on both branches).
+   * The session stages the normalized JSON and owns the temp-file
+   * lifecycle; buildArgs only hides the flag (Rule 2, MCP-config pattern).
+   */
+  outputSchemaFile?: string;
 };
 
 /**
@@ -117,7 +169,45 @@ export function resolveCodexSandboxMode(
 }
 
 export function buildCodexArgs(options: CodexBuildArgsOptions = {}): string[] {
-  const sandbox = resolveCodexSandboxMode(options.sandboxMode);
+  // `--approve-for-me` forces workspace-write + on-request review itself
+  // (verified in codex source: conflicts_with sandbox_mode +
+  // dangerously_bypass) — combining them is a caller bug, fail fast with
+  // a readable error instead of the CLI's conflict error.
+  if (options.approveForMe === true) {
+    const conflicts: string[] = [];
+    if (options.sandboxMode !== undefined) conflicts.push("sandboxMode (--sandbox)");
+    if (options.dangerouslySkipPermissions === true) {
+      conflicts.push("dangerouslySkipPermissions (--dangerously-bypass-approvals-and-sandbox)");
+    }
+    if (conflicts.length > 0) {
+      throw new RuntimeSessionError(
+        `codex approveForMe conflicts with ${conflicts.join(", ")}: --approve-for-me already forces workspace-write + on-request review`,
+        { runtime: "codex" },
+      );
+    }
+  }
+  // cwd / addDirs / profile / approveForMe are create-only flags:
+  // `exec resume` rejects them, so passing them with a resume id fails
+  // fast here instead of dying mid-run with a cryptic CLI error.
+  if (options.resumeThreadId) {
+    const createOnly: string[] = [];
+    if (options.cwd) createOnly.push("cwd (-C)");
+    if (options.addDirs && options.addDirs.length > 0) createOnly.push("addDirs (--add-dir)");
+    if (options.profile) createOnly.push("profile (-p)");
+    if (options.approveForMe === true) createOnly.push("approveForMe (--approve-for-me)");
+    if (createOnly.length > 0) {
+      throw new RuntimeSessionError(
+        `codex resume rejects create-only inputs (${createOnly.join(", ")}) — the resumed thread carries the dirs/profile/review mode granted at creation`,
+        { runtime: "codex" },
+      );
+    }
+  }
+  // approveForMe owns the sandbox (forced workspace-write); an explicit
+  // sandboxMode above already threw, and the platform default is ignored.
+  const sandbox =
+    options.approveForMe === true
+      ? "workspace-write"
+      : resolveCodexSandboxMode(options.sandboxMode);
   // Model ids ride argv (`--model <id>`) — reject flag-shaped ids before
   // the CLI can parse them as options. Sanitized once, reused below.
   let model: string | undefined;
@@ -136,15 +226,27 @@ export function buildCodexArgs(options: CodexBuildArgsOptions = {}): string[] {
   const networkArgs =
     sandbox === "workspace-write" ? ["-c", "sandbox_workspace_write.network_access=true"] : [];
   // Service tier override (both branches take `-c`; only `--sandbox`/`-C`
-  // are create-only). `"default"` omits the flag.
-  const tierArgs =
-    options.serviceTier && options.serviceTier !== "default"
-      ? ["-c", `service_tier="${options.serviceTier}"`]
-      : [];
+  // are create-only). `"default"` omits the flag. The value interpolates
+  // into a TOML string, so breakout chars (`"`, `\`, newlines) reject
+  // loudly instead of rewriting the config line.
+  let tierArgs: string[] = [];
+  if (options.serviceTier && options.serviceTier !== "default") {
+    if (/["\\\r\n]/.test(options.serviceTier)) {
+      throw new RuntimeSessionError(`invalid serviceTier: ${JSON.stringify(options.serviceTier)}`, {
+        runtime: "codex",
+      });
+    }
+    tierArgs = ["-c", `service_tier="${options.serviceTier}"`];
+  }
   // Plugin disable is a global flag, valid on resume too.
   const pluginArgs =
     options.disablePlugins === true || process.env["OD_CODEX_DISABLE_PLUGINS"] === "1"
       ? ["--disable", "plugins"]
+      : [];
+  // Explicit dangerous opt-in (verified flag on both branches).
+  const bypassArgs =
+    options.dangerouslySkipPermissions === true
+      ? ["--dangerously-bypass-approvals-and-sandbox"]
       : [];
   if (options.resumeThreadId) {
     const args: string[] = ["exec", "resume", "--json", "--skip-git-repo-check"];
@@ -154,6 +256,7 @@ export function buildCodexArgs(options: CodexBuildArgsOptions = {}): string[] {
     args.push("-c", `sandbox_mode="${sandbox}"`);
     args.push(...networkArgs);
     args.push(...pluginArgs);
+    args.push(...bypassArgs);
     // Quoted: `-c` takes TOML, and a bare word is not a valid TOML string.
     if (options.reasoning) args.push("-c", `model_reasoning_effort="${options.reasoning.effort}"`);
     args.push(...tierArgs);
@@ -163,32 +266,64 @@ export function buildCodexArgs(options: CodexBuildArgsOptions = {}): string[] {
       }
     }
     // Thread id is the positional SESSION_ID and must come after the flags.
-    // NOTE: no `-C`/`--add-dir` here — resume rejects both; the resumed
-    // session carries the dirs granted at creation (daemon parity).
+    // NOTE: no `-C`/`--add-dir`/`-p`/`--approve-for-me` here — resume
+    // rejects all four; the resumed session carries the dirs/profile/
+    // review mode granted at creation (daemon parity, enforced by the
+    // guard above). `--output-schema` IS valid on resume (verified).
+    if (options.outputSchemaFile) args.push("--output-schema", options.outputSchemaFile);
     args.push(options.resumeThreadId);
     return args;
   }
   const args: string[] = ["exec", "--json", "--skip-git-repo-check"];
   if (model) args.push("--model", model);
-  args.push("--sandbox", sandbox);
+  if (options.approveForMe === true) {
+    // The flag owns sandbox + policy (forced workspace-write); emitting
+    // `--sandbox` alongside would trip the CLI's own conflict error.
+    args.push("--approve-for-me");
+  } else {
+    args.push("--sandbox", sandbox);
+  }
   args.push(...networkArgs);
   args.push(...pluginArgs);
+  args.push(...bypassArgs);
   if (options.reasoning) args.push("-c", `model_reasoning_effort="${options.reasoning.effort}"`);
   args.push(...tierArgs);
-  // `-C/--cd` pins the session cwd on create (daemon parity). 0.150.1 has no
-  // `--add-dir`; extra allowedPaths ride `-C` (last wins — pass cwd first).
+  // `-C/--cd` pins the session cwd on create (daemon parity);
+  // `--add-dir` grants extra writable roots (verified in --help).
   if (options.cwd) args.push("-C", options.cwd);
   if (options.addDirs) {
     for (const dir of options.addDirs) {
-      args.push("-C", dir);
+      args.push("--add-dir", dir);
     }
   }
+  // Profile names ride argv (`-p <name>`) — same injection class as models.
+  const profile = sanitizeConfigId(options.profile, "profile", "codex");
+  if (profile) args.push("-p", profile);
+  if (options.outputSchemaFile) args.push("--output-schema", options.outputSchemaFile);
   if (options.images) {
     for (const f of options.images) {
       args.push("-i", f);
     }
   }
   return args;
+}
+
+/**
+ * Write the normalized schema JSON to a unique temp file for
+ * `--output-schema`; returns its path. The caller (CodexSession) deletes
+ * it on close — never leak temp files. Mirrors the claude MCP-config
+ * pattern (session-owned lifecycle, builder only hides the flag).
+ */
+export function writeCodexSchemaFile(schemaJson: string, hint = "session"): string {
+  const safe = hint.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const file = join(
+    tmpdir(),
+    `agent-runtimes-codex-schema-${safe}-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}.json`,
+  );
+  writeFileSync(file, schemaJson, "utf-8");
+  return file;
 }
 
 export type CodexLaunch = ResolvedLaunch;
@@ -433,13 +568,17 @@ export function readCodexPluginsFile(
 }
 
 /**
- * Known model→minimum-CLI contracts. Single sourced entry today:
- * production traces show <0.143.0 rejecting ChatGPT-backed `gpt-5.6-terra`
- * (daemon codex-model-preflight). Extend only with observed incompatibilities.
+ * Known model→minimum-CLI contracts — sourced from the evidence-backed
+ * `VERSION_FLOORS` table (`src/definition/compat.ts`), never lore.
+ * Extend only with observed incompatibilities (each needs a proving test).
  */
-const CODEX_MODEL_CLI_FLOORS: Readonly<Record<string, string>> = {
-  "gpt-5.6-terra": "0.143.0",
-};
+function codexModelCliFloors(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of floorsFor("codex")) {
+    if (f.model) out[f.model] = f.minimum;
+  }
+  return out;
+}
 
 export type CodexModelSupport =
   { supported: true } | { supported: false; model: string; required: string };
@@ -459,7 +598,7 @@ export function checkCodexModelSupport(
   const configured = readCodexDefaultModel(opts);
   const effective = trimmed || configured?.model || "";
   if (!effective) return { supported: true };
-  const required = CODEX_MODEL_CLI_FLOORS[effective];
+  const required = codexModelCliFloors()[effective];
   if (!required) return { supported: true };
   if (
     !trimmed &&

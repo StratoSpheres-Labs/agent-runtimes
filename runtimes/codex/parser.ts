@@ -1,4 +1,8 @@
-import { JsonlParser } from "../../src/parser/jsonl.js";
+import {
+  JsonlParser,
+  MAX_PARSER_BUFFER_BYTES,
+  bufferOverflowError,
+} from "../../src/parser/jsonl.js";
 import type { RuntimeEvent } from "../../src/events/runtime-event.js";
 import { asJsonValue } from "../../src/events/runtime-event.js";
 import type { RuntimeParser } from "../../src/parser/parser.js";
@@ -9,7 +13,7 @@ function asString(value: unknown): string | undefined {
 
 /**
  * Codex parser — Phase 13, shapes verified live against codex-cli 0.150.1
- * (`codex exec --json`):
+ * and re-verified on 0.156.1 (`codex exec --json`):
  *  {"type":"thread.started","thread_id":"..."}                  → session_started
  *  {"type":"turn.started"}                                     → ignored (transport marker)
  *  {"type":"item.started","item":{"type":"command_execution",
@@ -20,6 +24,11 @@ function asString(value: unknown): string | undefined {
  *                                                                 (empty → dropped)
  *  {"type":"item.completed","item":{"type":"command_execution",
  *    "id":"...",...}}                                           → tool_finished
+ *                                                                  (error:true on
+ *                                                                   nonzero exit_code)
+ *  {"type":"item.completed","item":{"type":"error",...}}          → dropped
+ *    (stream-level warnings, e.g. ignored config keys — no tool call
+ *    behind them; same lines stay on stderr)
  *  {"type":"item.completed","item":{"type":"agent_message",
  *    "id":"...","text":"..."}}                                  → text_delta + tool_finished
  *                                                                 (the model text lives here)
@@ -63,7 +72,15 @@ export class CodexParser implements RuntimeParser {
     const events: RuntimeEvent[] = [];
     const parts = this.buf.split("\n");
     const complete = isFlush ? parts : parts.slice(0, -1);
-    this.buf = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    const retained = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    if (retained.length > MAX_PARSER_BUFFER_BYTES) {
+      // Newline-less flood: drop the partial (never a valid line at this
+      // size) and say so — memory stays bounded, stream alive.
+      this.buf = "";
+      events.push(bufferOverflowError("CodexParser", MAX_PARSER_BUFFER_BYTES));
+    } else {
+      this.buf = retained;
+    }
     for (const raw of complete) {
       const line = raw.trim();
       if (!line) continue;
@@ -154,6 +171,12 @@ export class CodexParser implements RuntimeParser {
       case "item.completed": {
         const item = rec["item"] as Record<string, unknown> | undefined;
         const id = asString(item?.["id"]) ?? "tool_0";
+        // Stream-level warnings (e.g. "ignoring unrecognized configuration
+        // setting") arrive as item.completed/error with no tool call behind
+        // them — verified live on 0.156.1. Emitting tool_finished would fake
+        // a tool pairing, and an `error` event would false-alarm a healthy
+        // turn, so drop with provenance (the same lines stay on stderr).
+        if (item?.["type"] === "error") return [];
         // Reasoning summaries are display-only thinking — never tool
         // events (previously they surfaced as tool_started/tool_finished
         // with name "reasoning"). Empty text → dropped, not errored.
@@ -167,7 +190,15 @@ export class CodexParser implements RuntimeParser {
         if (item?.["type"] === "agent_message" && typeof item["text"] === "string") {
           events.push({ type: "text_delta", text: item["text"] });
         }
-        events.push({ type: "tool_finished", id, output: asJsonValue(item) });
+        // A nonzero command exit is the only failure signal exec gives —
+        // surface it so failed commands read differently from clean ones.
+        const exitCode = typeof item?.["exit_code"] === "number" ? item["exit_code"] : undefined;
+        events.push({
+          type: "tool_finished",
+          id,
+          output: asJsonValue(item),
+          error: exitCode !== undefined && exitCode !== 0,
+        });
         return events;
       }
       default: {

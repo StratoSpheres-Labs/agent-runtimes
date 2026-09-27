@@ -46,6 +46,19 @@ export function readClaudeTranscript(options: ClaudeTranscriptOptions): Transcri
  * slug-rule drift across CLI versions).
  */
 export function findClaudeTranscript(options: ClaudeTranscriptOptions): string | null {
+  // W4: the session id becomes a filename — a hostile `../../x` would
+  // escape the transcript root (blind read, fails open, but still a
+  // traversal). Native ids are uuids; reject anything path-shaped.
+  const sid = options.sessionId;
+  if (
+    sid.includes("/") ||
+    sid.includes("\\") ||
+    sid.includes("..") ||
+    sid.includes("\0") ||
+    sid.trim().length === 0
+  ) {
+    return null;
+  }
   const env = options.env ?? process.env;
   const home = options.homeDir ?? env["HOME"] ?? env["USERPROFILE"] ?? homedir();
   const root = join(home, ".claude", "projects");

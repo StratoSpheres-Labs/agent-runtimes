@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"role":"assistant","content":[{"id":"toolu_so1","input":{"color":"blue"},"name":"StructuredOutput","type":"tool_use"}]}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_so1","type":"tool_result","content":"Structured output provided successfully"}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.0163308,"usage":{"input_tokens":2893,"output_tokens":6}}

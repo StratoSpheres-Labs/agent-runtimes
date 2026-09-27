@@ -4,12 +4,18 @@
   type SessionRunOptions,
 } from "../../src/core/session.js";
 import type { AgentRun } from "../../src/core/run.js";
+import { RuntimeSessionError } from "../../src/core/errors.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
+import type { PromptContent } from "../../src/definition/content.js";
+import { splitPromptContent } from "../../src/definition/content.js";
+import { isKnownModel } from "../../src/discovery/models.js";
+import { opencodeDefinition } from "../opencode/definition.js";
 import type { PermissionHandler } from "../../src/definition/permission.js";
 import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
 import { readOpencodeTranscript } from "../opencode/transcript.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
 import { AcpTransport } from "../../src/transport/acp.js";
@@ -51,7 +57,7 @@ export class OpencodeAcpSession implements AgentSession {
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
     this.onPermissionRequest = options.onPermissionRequest;
-    this.acpSessionId = options.resumeSessionId ?? null;
+    this.acpSessionId = sanitizeResumeId(options.resumeSessionId, "opencode-acp") ?? null;
     // NOTE: no reasoning passthrough 鈥?capabilities.reasoning is false
     // (no control channel wired); CreateSessionOptions.reasoning is
     // intentionally not forwarded.
@@ -64,9 +70,28 @@ export class OpencodeAcpSession implements AgentSession {
 
   private async createRun(
     runId: string,
-    prompt: string,
+    prompt: PromptContent,
     runOpts: SessionRunOptions,
   ): Promise<AgentRun> {
+    const { text, images: partImages } = splitPromptContent(prompt);
+    // No reasoning channel exists on ACP: reject per-run reasoning the
+    // same way creation rejects it (never silently drop it).
+    if (runOpts.reasoning !== undefined) {
+      throw new RuntimeSessionError(
+        "opencode-acp runs do not support reasoning controls: no reasoning channel is wired",
+        { runtime: "opencode-acp" },
+      );
+    }
+    const model = runOpts.model ?? this.model;
+    if (
+      model !== undefined &&
+      !isKnownModel("opencode-acp", model, opencodeDefinition.models?.fallbackModels ?? [])
+    ) {
+      throw new RuntimeSessionError(
+        `unknown model "${model}" for opencode-acp — not in the live catalog or fallback list`,
+        { runtime: "opencode-acp" },
+      );
+    }
     // Shim-aware spawn (win32 npm `.cmd` needs host node); native binaries
     // pass through untouched. Launch env seeds the agent env merge.
     const launch = resolveLaunch(this.command);
@@ -80,14 +105,14 @@ export class OpencodeAcpSession implements AgentSession {
     const run = new AcpRun(runId, {
       transport,
       cwd: this.cwd,
-      model: this.model,
+      model,
       mcpServers: this.mcpServers,
       onPermissionRequest: this.onPermissionRequest,
-      images: runOpts.images,
+      images: [...partImages, ...(runOpts.images ?? [])],
       timeoutMs: runOpts.timeout,
       resumeSessionId: this.acpSessionId ?? undefined,
     });
-    await run.start(prompt);
+    await run.start(text);
     // start() resolves only after a successful handshake, so the native id
     // is always available here 鈥?no event snooping needed.
     const native = run.nativeSessionId;
@@ -108,7 +133,7 @@ export class OpencodeAcpSession implements AgentSession {
     return run;
   }
 
-  public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
+  public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
     return this.inner.run(prompt, options);
   }
 

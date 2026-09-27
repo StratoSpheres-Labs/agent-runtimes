@@ -6,8 +6,13 @@ import {
   parseOpenCodeModels,
   mergeOpencodeModelLists,
   rememberOpencodeModels,
+  sanitizeOpencodeAgent,
   type OpencodeBuildArgsOptions,
 } from "./definition.js";
+import {
+  assertSessionInputsSupported,
+  assertWorkspaceFieldsSupported,
+} from "../../src/definition/session-inputs.js";
 import { OpencodeParser } from "./parser.js";
 import { OpencodeSession } from "./session.js";
 import { existsSync, readFileSync } from "node:fs";
@@ -228,7 +233,38 @@ export class OpencodeRuntime extends DefaultRuntime {
   }
 
   public override async createSession(options?: CreateSessionOptions): Promise<AgentSession> {
-    const { cwd, model, reasoning, mcpServers, workspace, resumeSessionId } = options ?? {};
+    const {
+      cwd,
+      model,
+      reasoning,
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      mcpServers,
+      workspace,
+      resumeSessionId,
+    } = options ?? {};
+    // Reject inputs this CLI cannot honor before anything spawns (never
+    // silently ignore): opencode has no workspace/permission channel, no
+    // system-prompt / token-budget / cost-budget / schema / profile /
+    // allowlist channels.
+    assertSessionInputsSupported("opencode", opencodeDefinition.capabilities, {
+      agent,
+      systemPrompt,
+      maxTokens,
+      maxBudgetUsd,
+      outputSchema,
+      profile,
+      allowedTools,
+      seedMessages,
+      reasoning,
+    });
+    assertWorkspaceFieldsSupported("opencode", [], workspace);
     // Reject unknown model picks before anything spawns: a refused turn
     // never mints a stillborn native session. Fail-open when the catalog was
     // never surfaced (refresh probes once on a primed miss).
@@ -238,6 +274,8 @@ export class OpencodeRuntime extends DefaultRuntime {
       opencodeDefinition.models?.fallbackModels ?? [],
       () => this.models(),
     );
+    // Fail fast on a malformed agent id (buildArgs re-checks per run).
+    const cleanAgent = sanitizeOpencodeAgent(agent, "opencode");
     const status = await this.detect();
     const command = status.installed ? status.executable : opencodeDefinition.executable.command;
     const sid = `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -247,6 +285,7 @@ export class OpencodeRuntime extends DefaultRuntime {
       cwd,
       model,
       reasoning,
+      agent: cleanAgent,
       mcpServers,
       workspace,
       resumeSessionId,
