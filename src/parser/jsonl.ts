@@ -10,6 +10,28 @@ import type { RuntimeParser } from "./parser.js";
 const DROP = Symbol("drop");
 
 /**
+ * Cap on a retained partial line (bytes). Complete lines are never
+ * affected — only a newline-less flood can grow the buffer past this,
+ * which is pathological (legit JSONL lines are KBs). Shared by every
+ * line-buffered parser (adapters mirror the same guard).
+ */
+export const MAX_PARSER_BUFFER_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Overflow signal: an `error` event, never a throw (keeps the stream
+ * alive) and never silent (consumers must see data was dropped).
+ */
+export function bufferOverflowError(component: string, cap: number): RuntimeEvent {
+  return {
+    type: "error",
+    error: {
+      code: "BUFFER_OVERFLOW",
+      message: `${component} buffer exceeded ${String(cap)} bytes — dropping partial line`,
+    },
+  };
+}
+
+/**
  * JsonlParser — handles:
  * - partial chunk buffering (Task 8.2)
  * - multiple events coalesced in one chunk
@@ -42,7 +64,15 @@ export class JsonlParser implements RuntimeParser {
     // Split on newline; keep last partial in buffer unless flushing
     const lines = this.buffer.split("\n");
     const complete = isFlush ? lines : lines.slice(0, -1);
-    this.buffer = isFlush ? "" : (lines[lines.length - 1] ?? "");
+    const retained = isFlush ? "" : (lines[lines.length - 1] ?? "");
+    if (retained.length > MAX_PARSER_BUFFER_BYTES) {
+      // Newline-less flood: drop the partial (it can never become a valid
+      // line at this size) and say so — memory stays bounded, stream alive.
+      this.buffer = "";
+      events.push(bufferOverflowError("JsonlParser", MAX_PARSER_BUFFER_BYTES));
+    } else {
+      this.buffer = retained;
+    }
 
     for (const raw of complete) {
       const line = raw.trim();

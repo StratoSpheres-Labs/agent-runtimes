@@ -1,5 +1,6 @@
 import { RuntimeProcess, type SpawnOptions } from "../core/lifecycle.js";
 import { RuntimeProtocolError, RuntimeTimeoutError } from "../core/errors.js";
+import { MAX_PARSER_BUFFER_BYTES } from "../parser/jsonl.js";
 import type { McpServer } from "../definition/mcp.js";
 
 /**
@@ -190,15 +191,40 @@ export class AcpTransport {
   }
 
   private send(msg: AcpMessage): void {
-    void this.process.write(`${JSON.stringify(msg)}\n`).catch(() => {
+    // Messages built by the transport are plain data (never circular),
+    // so stringify cannot throw here; the agent-request path above, which
+    // serializes caller-controlled values, uses sendRaw with its own guard.
+    this.sendRaw(JSON.stringify(msg));
+  }
+
+  private sendRaw(wire: string): void {
+    void this.process.write(`${wire}\n`).catch(() => {
       // Write after death → close path settles pendings; nothing more to do.
     });
   }
 
   private onBytes(chunk: Buffer): void {
+    if (this.closed) return;
     this.buf += this.decoder.decode(chunk, { stream: true });
     const parts = this.buf.split("\n");
-    this.buf = parts.pop() ?? "";
+    const retained = parts.pop() ?? "";
+    if (retained.length > MAX_PARSER_BUFFER_BYTES) {
+      // Newline-less flood: the transport cannot emit events (Rule 3), so
+      // fail the connection instead of growing forever — pending requests
+      // reject, the child is reaped, and AcpRun surfaces error + done.
+      // A compliant agent never sends a multi-MB single line.
+      this.buf = "";
+      const err = new RuntimeProtocolError(
+        `ACP transport buffer overflow: retained line exceeded ${String(MAX_PARSER_BUFFER_BYTES)} bytes — closing connection`,
+        { command: this.command },
+      );
+      this.failAllPending(err);
+      void this.close().catch(() => {
+        // Close already funnels through failAllPending; nothing more to do.
+      });
+      return;
+    }
+    this.buf = retained;
     for (const raw of parts) {
       const line = raw.trim();
       if (line) this.onLine(line);
@@ -251,7 +277,22 @@ export class AcpTransport {
     if (this.agentRequestHandler) {
       try {
         const result = await this.agentRequestHandler(method, params);
-        this.send({ jsonrpc: "2.0", id, result });
+        // The handler's return value is caller-controlled: a circular
+        // object would make JSON.stringify throw inside this voided
+        // promise (unhandled rejection = host crash). Serialize safely
+        // and answer -32603 instead.
+        let wire: string;
+        try {
+          wire = JSON.stringify({ jsonrpc: "2.0", id, result });
+        } catch {
+          this.send({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32603, message: "Handler result was not JSON-serializable" },
+          });
+          return;
+        }
+        this.sendRaw(wire);
         return;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

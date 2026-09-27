@@ -1,8 +1,9 @@
 import { RuntimeProcess, type ProcessExit } from "./lifecycle.js";
-import { RuntimeSessionError } from "./errors.js";
+import { RuntimeSessionError, RuntimeTimeoutError } from "./errors.js";
 import { EventStream } from "../events/event-stream.js";
 import type { RuntimeEvent } from "../events/runtime-event.js";
 import type { RuntimeParser } from "../parser/parser.js";
+import type { PromptContent } from "../definition/content.js";
 
 /**
  * Phase 5/6 — Run with unified RuntimeEvent stream.
@@ -22,6 +23,14 @@ export interface AgentRun {
   cancel(): Promise<void>;
   /** Wait for process exit */
   result(): Promise<ProcessExit>;
+  /**
+   * Append follow-up input while the turn is in flight (steering). Only
+   * available on runs started with `allowMidRunInput` on runtimes whose
+   * capability `midRunInput` is true (ACP `session/prompt`) — the base
+   * throws, adapters override the slot. Delivery is guaranteed; whether
+   * the agent interleaves the input mid-turn is agent-defined.
+   */
+  send?(input: PromptContent): Promise<void>;
   /** Cleanup after run — idempotent */
   close(): Promise<void>;
   /** Whether the run has completed */
@@ -50,7 +59,9 @@ export class DefaultRun implements AgentRun {
   private _done = false;
   private readonly stdinData: string | undefined;
   private readonly parser: RuntimeParser | undefined;
-  private readonly keepStdinOpen: boolean;
+  protected readonly keepStdinOpen: boolean;
+  protected readonly runCwd: string | undefined;
+  private readonly runCommand: string;
   private readonly stream = new EventStream();
   private sawDone = false;
 
@@ -59,6 +70,8 @@ export class DefaultRun implements AgentRun {
     this.stdinData = options.stdinData;
     this.parser = options.parser;
     this.keepStdinOpen = options.keepStdinOpen ?? false;
+    this.runCwd = options.cwd;
+    this.runCommand = options.command;
     this.process = new RuntimeProcess({
       command: options.command,
       args: options.args,
@@ -69,7 +82,12 @@ export class DefaultRun implements AgentRun {
   }
 
   public get done(): boolean {
-    return this._done;
+    // Turn-over, not process-reaped: the session gate must open as soon as
+    // the parser emits `done`, even if the child lingers in teardown (slow
+    // exits made back-to-back runs spuriously reject). Lifecycle methods
+    // below keep using the `_done` field, so cancel()/close() still reap
+    // lingering processes.
+    return this._done || this.sawDone;
   }
 
   public get pid(): number | undefined {
@@ -98,9 +116,23 @@ export class DefaultRun implements AgentRun {
     if (stdout) {
       if (this.parser) {
         const parser = this.parser;
-        // Parser mode: raw bytes → parser → RuntimeEvent
+        // Parser mode: raw bytes → parser → RuntimeEvent. A throwing
+        // parser must never take down the host (EventEmitter would turn it
+        // into an uncaughtException) — convert to an error event instead.
         stdout.on("data", (chunk: Buffer) => {
-          const events = parser.parse(new Uint8Array(chunk));
+          let events: RuntimeEvent[];
+          try {
+            events = parser.parse(new Uint8Array(chunk));
+          } catch (err) {
+            this.push({
+              type: "error",
+              error: {
+                code: "PARSER_ERROR",
+                message: err instanceof Error ? err.message : String(err),
+              },
+            });
+            return;
+          }
           for (const e of events) {
             if (e.type === "done") this.sawDone = true;
             this.push(e);
@@ -134,9 +166,20 @@ export class DefaultRun implements AgentRun {
     }
 
     if (this.stdinData !== undefined) {
-      void this.process.write(this.stdinData).then(() => {
-        if (!this.keepStdinOpen) this.process.endStdin();
-      });
+      // The rejection handler matters: without it an early-exiting agent
+      // (EPIPE on write) becomes an unhandled rejection and kills the host.
+      void this.process.write(this.stdinData).then(
+        () => {
+          if (!this.keepStdinOpen) this.process.endStdin();
+        },
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          this.push({
+            type: "error",
+            error: { code: "STDIN_WRITE_FAILED", message },
+          });
+        },
+      );
     } else if (!this.keepStdinOpen) {
       this.process.endStdin();
     }
@@ -146,8 +189,22 @@ export class DefaultRun implements AgentRun {
         this._done = true;
         if (this.parser) {
           const parser = this.parser;
-          // Flush any buffered partial
-          for (const e of parser.flush()) {
+          // Flush any buffered partial (guarded: a throw here would land in
+          // a voided promise as an unhandled rejection and kill the host).
+          let flushed: RuntimeEvent[];
+          try {
+            flushed = parser.flush();
+          } catch (err) {
+            flushed = [];
+            this.push({
+              type: "error",
+              error: {
+                code: "PARSER_ERROR",
+                message: err instanceof Error ? err.message : String(err),
+              },
+            });
+          }
+          for (const e of flushed) {
             if (e.type === "done") this.sawDone = true;
             this.push(e);
           }
@@ -182,7 +239,11 @@ export class DefaultRun implements AgentRun {
       (err: unknown) => {
         this._done = true;
         const message = err instanceof Error ? err.message : String(err);
-        this.push({ type: "error", error: { code: "PROCESS_ERROR", message } });
+        // Timeouts keep their identity (ACP runs already emit TIMEOUT):
+        // frontends must not string-match messages to tell "too slow"
+        // apart from "crashed".
+        const code = err instanceof RuntimeTimeoutError ? "TIMEOUT" : "PROCESS_ERROR";
+        this.push({ type: "error", error: { code, message } });
         this.push({ type: "done" });
         this.sawDone = true;
         this.stream.close();
@@ -230,6 +291,19 @@ export class DefaultRun implements AgentRun {
     await this.process.close();
     this._done = true;
     this.stream.close();
+  }
+
+  /**
+   * Base `send()` always rejects: raw stdin bytes have no agreed meaning
+   * across CLIs (stream-json envelopes vs. prompt text), so an adapter
+   * must opt in explicitly (ClaudeRun, AcpRun). Core never guesses (Rule 6).
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await -- intentionally synchronous: the base never touches I/O, it only rejects (adapters override with real channels)
+  public async send(_input?: PromptContent): Promise<void> {
+    throw new RuntimeSessionError(
+      `mid-run input (send) is not supported by this run ("${this.runCommand}") — start the run with allowMidRunInput on a runtime whose midRunInput capability is true`,
+      { command: this.runCommand, cwd: this.runCwd },
+    );
   }
 
   // NOTE: no respondToPermission here — stdin answer envelopes are

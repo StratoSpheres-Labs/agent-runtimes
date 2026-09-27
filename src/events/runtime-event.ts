@@ -103,6 +103,26 @@ export interface PermissionRequestEvent extends RunScoped {
   raw?: JsonValue;
 }
 
+/**
+ * A harness-level tool gate already decided against the call
+ * (claude `system/permission_denied`). Unlike `permission_request`
+ * there is nothing to answer — the decision was made (usually
+ * auto-deny in print mode) and this event only carries the reason.
+ * `id` joins with the `tool_started`/`tool_finished` of the same call,
+ * so UIs can render "Write blocked: <reason>" inline. Consumers that
+ * don't know the discriminant fail open (see docs/frontend.md).
+ */
+export interface PermissionDeniedEvent extends RunScoped {
+  type: "permission_denied";
+  /** Native tool call id (`tool_use_id`) — joins with tool_started/finished. */
+  id: string;
+  toolName?: string;
+  /** Why it was denied (`decision_reason`/`message`) — display-ready. */
+  reason?: string;
+  /** Native decision class (e.g. `"safetyCheck"`) — for filtering. */
+  kind?: string;
+}
+
 export type RuntimeEvent =
   | SessionStartedEvent
   | TextDeltaEvent
@@ -112,4 +132,5 @@ export type RuntimeEvent =
   | ErrorEvent
   | DoneEvent
   | UsageEvent
-  | PermissionRequestEvent;
+  | PermissionRequestEvent
+  | PermissionDeniedEvent;

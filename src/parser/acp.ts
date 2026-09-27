@@ -1,6 +1,7 @@
 import type { RuntimeEvent } from "../events/runtime-event.js";
 import { asJsonValue } from "../events/runtime-event.js";
 import type { RuntimeParser } from "./parser.js";
+import { MAX_PARSER_BUFFER_BYTES, bufferOverflowError } from "./jsonl.js";
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -52,7 +53,15 @@ export class AcpParser implements RuntimeParser {
     const events: RuntimeEvent[] = [];
     const parts = this.buf.split("\n");
     const complete = isFlush ? parts : parts.slice(0, -1);
-    this.buf = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    const retained = isFlush ? "" : (parts[parts.length - 1] ?? "");
+    if (retained.length > MAX_PARSER_BUFFER_BYTES) {
+      // Newline-less flood: drop the partial (never a valid line at this
+      // size) and say so — memory stays bounded, stream alive.
+      this.buf = "";
+      events.push(bufferOverflowError("AcpParser", MAX_PARSER_BUFFER_BYTES));
+    } else {
+      this.buf = retained;
+    }
     for (const raw of complete) {
       const line = raw.trim();
       if (!line) continue;

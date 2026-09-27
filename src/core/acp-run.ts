@@ -3,7 +3,9 @@ import { EventStream } from "../events/event-stream.js";
 import type { RuntimeEvent } from "../events/runtime-event.js";
 import { asJsonValue } from "../events/runtime-event.js";
 import type { ProcessExit } from "./lifecycle.js";
-import { RuntimeProtocolError, RuntimeTimeoutError } from "./errors.js";
+import { RuntimeProtocolError, RuntimeSessionError, RuntimeTimeoutError } from "./errors.js";
+import type { PromptContent } from "../definition/content.js";
+import { splitPromptContent } from "../definition/content.js";
 import { type AcpTransport, buildAcpMcpServers } from "../transport/acp.js";
 import type { McpServer } from "../definition/mcp.js";
 import type { PermissionHandler, PermissionRequest } from "../definition/permission.js";
@@ -112,9 +114,24 @@ export class AcpRun implements AgentRun {
   /**
    * Handshake then prompt. Rejects (never half-starts) when initialize,
    * session/new, or set_model fails, so callers observe setup errors
-   * instead of a silent dead run.
+   * instead of a silent dead run. A rejected start always reaps the
+   * spawned child (close-before-throw): without this the long-lived agent
+   * process survives as a zombie — the run object is discarded by the
+   * caller, so nobody else can clean it up.
    */
   public async start(prompt: string): Promise<void> {
+    try {
+      await this.handshake(prompt);
+    } catch (err) {
+      await this.close().catch(() => {
+        // Cleanup is best-effort; the original handshake error is what
+        // the caller must see.
+      });
+      throw err;
+    }
+  }
+
+  private async handshake(prompt: string): Promise<void> {
     await this.transport.start();
     if (this.onPermissionRequest !== undefined) {
       const handler = this.onPermissionRequest;
@@ -197,6 +214,42 @@ export class AcpRun implements AgentRun {
       );
   }
 
+  /**
+   * Mid-run steering: issues another `session/prompt` on the live session
+   * (fire-and-forget — awaiting it would block until the turn ends).
+   * A failed follow-up surfaces as an `error` event, never a throw, so the
+   * in-flight turn keeps streaming; `push` on a closed stream is a no-op.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await -- fire-and-forget by design: awaiting the prompt round-trip would block until the turn ends
+  public async send(input: PromptContent): Promise<void> {
+    if (this.finished) {
+      throw new RuntimeSessionError("cannot send input to a finished ACP run", {
+        runtime: "acp",
+      });
+    }
+    if (!this.sessionId) {
+      throw new RuntimeSessionError("ACP run has not started yet — send() needs start()", {
+        runtime: "acp",
+      });
+    }
+    const sessionId = this.sessionId;
+    const { text, images } = splitPromptContent(input);
+    const promptParts: Array<Record<string, unknown>> = [{ type: "text", text }];
+    for (const img of images) {
+      const { base64, mimeType } = imageToBase64(img, this.cwd);
+      promptParts.push({ type: "image", data: base64, mimeType });
+    }
+    const request = this.transport.request(
+      "session/prompt",
+      { sessionId, prompt: promptParts },
+      { timeoutMs: this.timeoutMs },
+    );
+    void request.then(undefined, (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      this.push({ type: "error", error: { code: "SEND_FAILED", message } });
+    });
+  }
+
   public async cancel(): Promise<void> {
     if (this.finished) return;
     if (this.sessionId !== null) {
@@ -215,6 +268,9 @@ export class AcpRun implements AgentRun {
 
   public async close(): Promise<void> {
     this.transport.setAgentRequestHandler(null);
+    // Turn-over for the session gate (mirrors DefaultRun: the gate opens
+    // on completion, not on transport teardown).
+    this._done = true;
     if (!this.finished) {
       this.finished = true;
       this.unsubscribe?.();
@@ -235,6 +291,7 @@ export class AcpRun implements AgentRun {
   private finishTurnOk(res: unknown): void {
     if (this.finished) return;
     this.finished = true;
+    this._done = true;
     let stopReason: string | null = null;
     let usageRaw: Record<string, unknown> | undefined;
     if (typeof res === "object" && res !== null) {
@@ -282,6 +339,7 @@ export class AcpRun implements AgentRun {
   private finishTurnError(err: unknown): void {
     if (this.finished) return;
     this.finished = true;
+    this._done = true;
     const e = err instanceof Error ? err : new Error(String(err));
     this.push({
       type: "error",

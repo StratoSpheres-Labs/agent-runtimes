@@ -2,6 +2,7 @@ export type {
   DoneEvent,
   ErrorEvent,
   JsonValue,
+  PermissionDeniedEvent,
   PermissionRequestEvent,
   ReasoningDeltaEvent,
   RunScoped,
@@ -13,4 +14,4 @@ export type {
   UsageEvent,
 } from "./runtime-event.js";
 export { asJsonValue } from "./runtime-event.js";
-export { EventStream } from "./event-stream.js";
+export { EventStream, MAX_STREAM_QUEUE_LENGTH } from "./event-stream.js";

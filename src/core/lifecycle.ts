@@ -152,14 +152,19 @@ export class RuntimeProcess {
       });
     }
     return new Promise((resolve, reject) => {
+      // L5: the drain listener is removed on every settle path — otherwise
+      // the error path orphans it on the stream until a future drain.
+      const onDrain = (): void => {
+        stdin.removeListener("drain", onDrain);
+        resolve();
+      };
       const ok = stdin.write(data, (err) => {
+        stdin.removeListener("drain", onDrain);
         if (err) reject(err);
         else resolve();
       });
       if (!ok) {
-        stdin.once("drain", () => {
-          resolve();
-        });
+        stdin.once("drain", onDrain);
       }
     });
   }
