@@ -21,11 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is pinned to a stable image: macos-latest (Tahoe 26)
-        # repeatedly SIGTERM'd the test step with zero failing
-        # assertions (2026-09-27, three consecutive runs). Re-pin to
-        # latest only after the fleet image stabilizes.
-        os: [windows-latest, macos-15, ubuntu-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
         node: [22, 24]
     steps:
       - uses: actions/checkout@v4
