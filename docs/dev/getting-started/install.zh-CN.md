@@ -7,7 +7,7 @@ git clone <this-repo> && cd agent-runtimes
 pnpm install && pnpm build
 ```
 
-> 还没发 npm——首个 release 之前用本地路径引用或 `pnpm link`。
+> 已发 npm（`@stratosphereslab/agent-runtimes`）——直接 `pnpm add` 引用；改库本体时才用本地路径或 `pnpm link`。
 
 ## 验证
 
@@ -29,13 +29,13 @@ node dist/cli.js doctor codex
 
 ```
 Executable   ✓  C:\...\npm\node_modules\opencode-ai\bin\opencode.exe
-Version      ✓  1.18.31
-Installs     ✓  npm 1.18.31 (selected)
+Version      ✓  1.18.32
+Installs     ✓  npm 1.18.32 (selected)
 ```
 
 ## 装 CLI 本体
 
-哪个包管理器都行——库认得出 npm/pnpm/bun/winget 的安装，每个 CLI 自动选最新可用的（见[安装发现](../discovery/installs.md)）：
+哪个包管理器都行——库认得出 npm/pnpm/bun/winget 的安装，每个 CLI 自动选最新可用的：
 
 ```bash
 npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
@@ -49,4 +49,4 @@ npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
 - `not found on PATH`——装 CLI，或用 `*_BIN` 指过去
   （`OPENCODE_BIN`、`CLAUDE_BIN`、`CODEX_BIN`）。
 - `shim-broken`——`.cmd` 垫片的目标没了，重装那一份。
-- 完整排错见 `docs/development.md`。
+- 完整排错见[development.md](../../development.zh-CN.md)。

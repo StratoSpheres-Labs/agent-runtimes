@@ -34,12 +34,13 @@ This is the contributor entry point. It covers how to set up, build, test, debug
 - **pnpm >= 10** (`corepack enable && corepack prepare pnpm@10 --activate`). The repo is `type: module` and uses `pnpm-workspace.yaml`.
 - **Agent CLIs** (optional, but needed for integration/live tests):
   ```bash
-  opencode --version   # 1.18.27 verified locally at .../opencode-ai/bin/opencode.exe
-  claude --version     # 2.1.187 via WinGet (...\Anthropic.ClaudeCode_...\claude.exe)
-  codex --version      # 0.150.1 via npm (codex.cmd shim → node vendor)
+  opencode --version   # 1.18.32 via npm (.../npm/node_modules/opencode-ai/bin/opencode.exe)
+  claude --version     # 2.1.283 via npm (.../npm/claude.cmd; ignore any stale pnpm shim)
+  codex --version      # 0.157.1 via npm (codex.cmd shim → node vendor)
   # If a CLI is absent, its integration test is skipped — `pnpm test` still passes.
   # To install opencode for CI parity: npm install -g opencode-ai@latest
   ```
+  After any CLI upgrade run `pnpm compat:record` to refresh the `tested` tables (see `CLI Upgrades` below).
 - **Windows is the primary dev machine**; `macos-latest` and `ubuntu-latest` are covered only via CI (see `CI` below). Always use `os.tmpdir()` + `fs.mkdtemp` for scratch dirs, never `C:\Temp`.
 
 ---
@@ -63,7 +64,7 @@ pnpm build   # tsup ESM node20 → dist/index.js + dist/index.d.ts + dist/cli.js
 ```
 src/core/         # runtime, session, run, registry, lifecycle — agent-agnostic (Rule 1)
 src/definition/   # identity, executable, input, transport, session, capability, workspace, permission, image, prompt, reasoning, model
-src/events/       # RuntimeEvent (session_started|text_delta|tool_started|tool_finished|error|done|usage|permission_request) + EventStream
+src/events/       # RuntimeEvent (session_started|text_delta|reasoning_delta|tool_started|tool_finished|usage|permission_request|permission_denied|error|done) + EventStream
 src/transport/    # transport interface + StdioTransport + AcpTransport (JSON-RPC over stdio)
 src/parser/       # parser interface + JsonlParser + AcpParser
 src/discovery/    # executable (where/which), version, capabilities (help probing), models, npm-shim, run-command, env
@@ -99,7 +100,7 @@ flowchart TB
         AUTH["auth()<br/>auth list / status"]
         MOD["models()<br/>listModels + fallback"]
         MCPD["mcp()<br/>mcp list"]
-        CAP["capabilitiesProbed()<br/>--help flag scan"]
+        CAP["probeFlags()<br/>--help scan (doctor Flags row)"]
     end
 
     subgraph SessionLayer["Session (spans many Processes)"]
@@ -141,8 +142,8 @@ Key invariants (see `architecture.md`): `Session ≠ Process` (each `run()` spaw
 ```bash
 pnpm build      # tsup → dist/ — fails if tsup config or tsconfig is broken
 pnpm lint       # eslint flat + typescript-eslint strict + prettier — fails on `no-empty`, `no-unused-expressions`, `restrict-template-expressions` etc.
-pnpm typecheck  # tsc --noEmit — fails on `noUnnecessaryCondition`, missing `workspace` field, etc.
-pnpm test       # vitest run — 196 tests, ~35s, 34 files
+pnpm typecheck  # tsc --noEmit — fails on `noUnnecessaryCondition`, missing capability fields, etc.
+pnpm test       # vitest run — 553 tests, ~40s, 56 files
 ```
 
 - **Fixing `build`**: check `tsup.config.ts` `entry` and `tsconfig.json` `moduleResolution: bundler`.
@@ -179,7 +180,7 @@ Cover `illegal.jsonl` (invalid JSON → `INVALID_JSON`), `unknown.jsonl` (`UNKNO
 const runtime = await runtimes.resolve("opencode-acp");
 const session = await runtime.createSession({
   cwd: mkdtempSync(join(tmpdir(), "...")),
-  model: "opencode/mimo-v2.5-free",
+  model: "opencode/mimo-v2.6-flash-free",
 });
 const run = await session.run("reply with exactly: OK", { timeout: 90000 });
 for await (const e of run.events()) if (e.type === "text_delta") text += e.text;
@@ -243,6 +244,8 @@ export const myDefinition: RuntimeDefinition = {
   executable: { command: "my-agent", aliases: ["my-agent-bin"], versionArgs: ["--version"] },
   input: { type: "stdin" }, // or "argv" / "file" — stdin is cross-platform safe (32767 limit)
   transport: { type: "stdio" }, // or "acp"
+  // All 15 capability flags are REQUIRED — copy the full set or the
+  // definition will not typecheck (pre-1.0 breaking is accepted).
   capabilities: {
     streaming: true,
     sessionResume: true,
@@ -250,6 +253,15 @@ export const myDefinition: RuntimeDefinition = {
     reasoning: true,
     images: true,
     workspace: true,
+    agentSelection: false,
+    midRunInput: false,
+    historySeed: false,
+    systemPrompt: false,
+    maxTokens: false,
+    costBudget: false,
+    structuredOutput: false,
+    toolAllowlist: false,
+    profileSelection: false,
   },
   session: { persistent: true },
   models: { fallbackModels: [{ id: "my-model", provider: "my" }], listCommand: ["models"] },
@@ -320,7 +332,7 @@ registry.register(myDefinition, () => new MyRuntime());
 - [ ] `src/core` has no `if (runtime.id==="xxx")` (Rule 1)
 - [ ] No CLI flags leak to `CreateSessionOptions` (Rule 2)
 - [ ] `Session !== Process` shown via `tests/session.test.ts`
-- [ ] `RuntimeEvent` is `text_delta|tool_started|tool_finished|error|done|usage|permission_request` only
+- [ ] `RuntimeEvent` is `session_started|text_delta|reasoning_delta|tool_started|tool_finished|usage|permission_request|permission_denied|error|done` only
 - [ ] `pnpm build && pnpm lint && pnpm typecheck && pnpm test` green on `windows` (local) and CI `6/6`
 
 ---
@@ -335,7 +347,7 @@ registry.register(myDefinition, () => new MyRuntime());
   // Opencode: --dir (always, via resolve(cwd)) + images -f
   ```
 
-  Paths are `resolve(cwd)` + `normalizeWorkspaceAllowedPaths` (dedupe, `isAbsolute`, `trim`). `opencode --dir` is mandatory (daemon's `appendOpenCodeWorkspaceDir`) to avoid writing to the repo root.
+  Paths are `resolve(cwd)` + `normalizeWorkspaceAllowedPaths` (dedupe, `isAbsolute`, `trim`). `opencode --dir` is passed whenever `cwd` is set (omitted otherwise) — it pins the daemon workspace, it is not mandatory.
 
 - **Permissions** (`src/definition/permission.ts` + `src/core/run.ts`):
 
@@ -401,21 +413,41 @@ import {
   pnpm build                        # must rebuild after src changes
   ```
 
-  `package.json` is `type:module`, `sideEffects:false`, `exports: {".": {import:"./dist/index.js"}}`, `bin: {agent-runtimes:"./dist/cli.js"}`.
+  `package.json` is `type:module`, `sideEffects:false` (zero runtime deps — `node:` builtins only), `exports` maps `"."` (+ `"./package.json"`), `bin: {agent-runtimes:"dist/cli.js"}`, `files: ["dist","NOTICE"]`, `publishConfig: {access:"public", provenance:true}`.
 
-- **Share via npm**:
+- **Share via npm** (tag-driven; `.github/workflows/publish.yml`):
 
   ```bash
-  pnpm build
-  pnpm publish --access public   # requires npm login; package name agent-runtimes must be free
+  # version is already bumped and CI is green on main:
+  git tag v0.1.2 && git push origin v0.1.2
+  # workflow verifies tag == package.json version, runs build/lint/typecheck/test,
+  # then `npm publish --provenance --access public` (skips if already published)
   ```
 
-  `files: ["dist"]` ensures only `dist/` is published (source stays out). Add `prepublishOnly: "pnpm build"` if you want to guard against forgetting.
+  The package is scoped (`@stratosphereslab/agent-runtimes`) — `access:public` is required or the registry rejects the publish. `prepublishOnly: "pnpm build"` guards manual publishes. Verify the tarball with `pnpm pack --dry-run` (below).
 
 - **Verify the tarball**:
   ```bash
   pnpm pack --dry-run   # lists files that would be published
   ```
+
+---
+
+## CLI Upgrades (zero-touch)
+
+A new `opencode`/`claude`/`codex` release never requires a code change to stay correct: versions newer than every `tested` entry fail open, and `doctor` says so (`1.18.32 (newer than tested 1.18.31 — fail-open)`). The routine after an upgrade is:
+
+```bash
+pnpm compat:record         # refresh tested tables from live installs (append-only)
+pnpm test tests/integration # prove the new CLI still runs a turn
+```
+
+Only two outcomes need a human:
+
+- **Something broke** → add a `minimum` floor with a `VERSION_FLOORS` entry (`src/definition/compat.ts`) citing the failing test as `evidence`. Floors without evidence are rejected by `tests/compat.test.ts`.
+- **A new flag you want to use** (e.g. `--agent`) → verify it in `--help` first, wire it behind `buildArgs()`, and add it to `ADVISORY_PROBE_FLAGS` (`src/discovery/capabilities.ts`).
+
+No breakage + no new flag = zero diff. That is the contract (`src/definition/version.ts`).
 
 ---
 
@@ -442,15 +474,15 @@ import {
 
 ## Release
 
-- `main` is protected after `v0.1.0`. Use `feat/*` branches → PR, `Conventional Commits` (`feat:`, `fix:`, `ci:`, `docs:`).
+- Direct commits to `main` are allowed before `v1.0.0` (see `AGENTS.md`); use `Conventional Commits` (`feat:`, `fix:`, `ci:`, `docs:`) so the history stays releasable. Switch to protected `main` + `feat/*` → PR after the first major.
 - Before tagging: `pnpm build && pnpm lint && pnpm typecheck && pnpm test` green locally and on CI `6/6`.
-- Tag & publish:
+- Tag & publish (automated — do not `npm publish` by hand):
   ```bash
-  npm version patch|minor|major -m "chore: release %s"
-  git push --follow-tags
-  npm publish --access public  # or via `pnpm publish`
-  # GitHub Release is created from the tag; CI does not auto-publish (add a `publish.yml` if you want it)
+  npm version patch|minor|major -m "chore: release %s"  # bumps package.json (+ lockfile)
+  git push --follow-tags                                  # tag vX.Y.Z triggers publish.yml
+  # publish.yml: tag == version check → gates → npm publish --provenance --access public
   ```
+- The registry never overwrites: publishing an existing version is a skip, not an error — bump the version for every release.
 
 ---
 

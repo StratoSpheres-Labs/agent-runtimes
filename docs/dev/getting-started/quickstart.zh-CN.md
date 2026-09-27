@@ -38,6 +38,7 @@ await session.close();
 ## 3. 你刚刚依赖的三条规则
 
 - 一个会话同时只跑一个 run——前一个没完就调第二个会抛错，绝不悄悄取消。
+- 前一轮没排空到 `done` 就开下一轮会直接拒绝（否则续接会悄悄开新会话丢上下文）。
 - `run.cancel()` 以终态 `done` 收尾；光 `close()` 是静默收尾。
 - 思考过程走 `reasoning_delta`，绝不混进 `text_delta`。
 
@@ -46,9 +47,9 @@ await session.close();
 - `RuntimeNotFoundError`——`resolve()` 的 id 写错了；合法值：
   `opencode`、`opencode-acp`、`claude`、`codex`。
 - 进程非零退出——先收到 `error` 事件，再收到 `done`。信息里带原因，不带密钥。
-- 完整错误目录见[资源](../resources/errors.md)。
+- 完整错误目录见[frontend.md](../../frontend.md#error-codes-machine-readable-never-string-match)。
 
 ## 下一步
 
-- [核心模型](../concepts/core-model.md)——Runtime/Session/Run 到底是什么。
-- [流式消费](../running/runs-streaming.md)——全部事件类型、权限、用量。
+- [架构](../../architecture.md)——Runtime/Session/Run 到底是什么。
+- [前端约定](../../frontend.md)——全部事件类型、权限、用量。

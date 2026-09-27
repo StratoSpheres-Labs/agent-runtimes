@@ -7,8 +7,9 @@ git clone <this-repo> && cd agent-runtimes
 pnpm install && pnpm build
 ```
 
-> Not published to npm yet — consume via local path or `pnpm link` until
-> the first release.
+> Published on npm as `@stratosphereslab/agent-runtimes` — consume via
+> `pnpm add @stratosphereslab/agent-runtimes`, or via local path / `pnpm
+link` when hacking on the library itself.
 
 ## Verify
 
@@ -32,15 +33,14 @@ A healthy row looks like:
 
 ```
 Executable   ✓  C:\...\npm\node_modules\opencode-ai\bin\opencode.exe
-Version      ✓  1.18.31
-Installs     ✓  npm 1.18.31 (selected)
+Version      ✓  1.18.32
+Installs     ✓  npm 1.18.32 (selected)
 ```
 
 ## Installing the CLIs themselves
 
 Any manager works — the library recognizes npm/pnpm/bun/winget installs
-and picks the newest invocable copy per CLI (see
-[Installs](../discovery/installs.md)):
+and picks the newest invocable copy per CLI:
 
 ```bash
 npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
@@ -56,4 +56,4 @@ npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
 - `not found on PATH` — install the CLI or point `*_BIN` at it
   (`OPENCODE_BIN`, `CLAUDE_BIN`, `CODEX_BIN`).
 - `shim-broken` — a `.cmd` shim whose target vanished; reinstall that copy.
-- Full troubleshooting: `docs/development.md`.
+- Full troubleshooting: [development.md](../../development.md).

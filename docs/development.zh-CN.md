@@ -30,9 +30,9 @@
 - **pnpm >= 10**（`corepack enable && corepack prepare pnpm@10 --activate`），仓库为 `type: module` 且含 `pnpm-workspace.yaml`
 - **Agent CLI**（可选，无则集成测试跳过，`pnpm test` 仍绿）：
   ```bash
-  opencode --version   # 本机已验 1.18.27 @ .../opencode-ai/bin/opencode.exe
-  claude --version     # 2.1.187 WinGet
-  codex --version      # 0.150.1 npm 的 codex.cmd → node vendor
+  opencode --version   # 本机已验 1.18.32 @ npm .../node_modules/opencode-ai/bin/opencode.exe
+  claude --version     # 2.1.283 npm（无视残留的 pnpm shim）
+  codex --version      # 0.157.1 npm 的 codex.cmd → node vendor
   # 无 CLI 时集成测试优雅跳过；CI 的 ubuntu+node24 会 npm install -g opencode-ai 真跑
   ```
 - 主开发机 `Windows`，`macos-latest`/`ubuntu-latest` 仅 CI 覆盖，临时目录一律 `os.tmpdir()` + `fs.mkdtemp`，勿写死 `C:\Temp`
@@ -58,7 +58,7 @@ pnpm build   # tsup ESM node20 → dist/index.js + dist/index.d.ts + dist/cli.js
 ```
 src/core/           # runtime、session、run、registry、lifecycle — 与 agent 无关（规则 1）
 src/definition/     # identity、executable、input、transport、session、capability、workspace、permission、image、prompt、reasoning、model
-src/events/         # RuntimeEvent（session_started|text_delta|tool_started|tool_finished|error|done|usage|permission_request）+ EventStream
+src/events/         # RuntimeEvent（session_started|text_delta|reasoning_delta|tool_started|tool_finished|usage|permission_request|permission_denied|error|done）+ EventStream
 src/transport/      # transport 接口 + StdioTransport + AcpTransport（JSON-RPC over stdio）
 src/parser/         # parser 接口 + JsonlParser + AcpParser
 src/discovery/      # executable（where/which）、version、capabilities（help 探测）、models、npm-shim、run-command、env
@@ -94,7 +94,7 @@ flowchart TB
         AUTH["auth()<br/>auth list / status"]
         MOD["models()<br/>listModels + fallback"]
         MCPD["mcp()<br/>mcp list"]
-        CAP["capabilitiesProbed()<br/>--help 旗标扫描"]
+        CAP["probeFlags()<br/>--help 扫描（doctor Flags 行）"]
     end
 
     subgraph SessionLayer["Session（横跨多个 Process）"]
@@ -137,12 +137,12 @@ flowchart TB
 pnpm build      # tsup → dist/ — tsup/tsconfig 坏则挂
 pnpm lint       # eslint flat + typescript-eslint strict + prettier — `no-empty`/`no-unused-expressions`/`restrict-template-expressions` 等
 pnpm typecheck  # tsc --noEmit — 缺 `workspace` 字段、`RuntimeEvent` 漏分支等
-pnpm test       # vitest run — 196 用例，约 35s，34 文件
+pnpm test       # vitest run — 553 用例，约 40s，56 文件
 ```
 
 - 修 `build`：看 `tsup.config.ts` 的 `entry` 与 `tsconfig.json` 的 `moduleResolution: bundler`
 - 修 `lint`：`pnpm lint:fix` 可自动修；`catch (_e) { String(_e) }` 同时满足 `no-empty` + `no-unused-expressions` + `no-meaningless-void-operator`
-- 修 `typecheck`：确保 `RuntimeDefinition.capabilities` 含 `workspace`（Phase 23 新增）且 `RuntimeEvent` 联合穷尽
+- 修 `typecheck`：确保 `RuntimeDefinition.capabilities` 含全部 15 个必填布尔（缺一即炸）且 `RuntimeEvent` 联合穷尽
 - 修 `test`：先单文件 `npx vitest run tests/<file>.test.ts --reporter=verbose`，再全量 `pnpm test`
 
 CI 在 `windows/macos/ubuntu × node 22/24`（`fail-fast:false`，`timeout-minutes:20`）同序执行。
@@ -174,7 +174,7 @@ expect([...a, ...b, ...p.flush()]).toContainEqual({ type: "text_delta" });
 const runtime = await runtimes.resolve("opencode-acp");
 const session = await runtime.createSession({
   cwd: mkdtempSync(join(tmpdir(), "...")),
-  model: "opencode/mimo-v2.5-free",
+  model: "opencode/mimo-v2.6-flash-free",
 });
 const run = await session.run("reply with exactly: OK", { timeout: 90000 });
 for await (const e of run.events()) if (e.type === "text_delta") text += e.text;
@@ -237,6 +237,8 @@ export const myDefinition: RuntimeDefinition = {
   executable: { command: "my-agent", aliases: ["my-agent-bin"], versionArgs: ["--version"] },
   input: { type: "stdin" }, // 或 "argv" / "file" — stdin 跨 32767 最安全
   transport: { type: "stdio" }, // 或 "acp"
+  // 15 个 capability 布尔全必填——照抄全套，否则定义通不过 typecheck
+  //（v1.0 前允许 breaking）。
   capabilities: {
     streaming: true,
     sessionResume: true,
@@ -244,6 +246,15 @@ export const myDefinition: RuntimeDefinition = {
     reasoning: true,
     images: true,
     workspace: true,
+    agentSelection: false,
+    midRunInput: false,
+    historySeed: false,
+    systemPrompt: false,
+    maxTokens: false,
+    costBudget: false,
+    structuredOutput: false,
+    toolAllowlist: false,
+    profileSelection: false,
   },
   session: { persistent: true },
   models: { fallbackModels: [{ id: "my-model", provider: "my" }], listCommand: ["models"] },
@@ -314,7 +325,7 @@ registry.register(myDefinition, () => new MyRuntime());
 - [ ] `src/core` 无 `if (runtime.id==="xxx")`（规则 1）
 - [ ] `CreateSessionOptions` 不透 CLI 旗标（规则 2）
 - [ ] `Session !== Process`（`tests/session.test.ts` 模式）
-- [ ] `RuntimeEvent` 为 `text_delta|tool_started|tool_finished|error|done|usage|permission_request` 之一
+- [ ] `RuntimeEvent` 为 `session_started|text_delta|reasoning_delta|tool_started|tool_finished|usage|permission_request|permission_denied|error|done` 之一
 - [ ] `pnpm build && pnpm lint && pnpm typecheck && pnpm test` 在 `windows` 本地与 CI `6/6` 绿
 
 ---
@@ -326,10 +337,10 @@ registry.register(myDefinition, () => new MyRuntime());
   ```ts
   // Claude: --add-dir + --permission-mode + --dangerously-skip-permissions
   // Codex:  -C（新建）/ -c sandbox_mode="..."（续跑） + --sandbox
-  // Opencode: --dir（必带，经 resolve(cwd)）+ 图片 -f
+  // Opencode: --dir（有 cwd 才带，经 resolve(cwd)）+ 图片 -f
   ```
 
-  路径经 `resolve(cwd)` + `normalizeWorkspaceAllowedPaths`（去重、`isAbsolute`、`trim`），`opencode --dir` 必带（`daemon` 的 `appendOpenCodeWorkspaceDir`，防写到仓库根）。
+  路径经 `resolve(cwd)` + `normalizeWorkspaceAllowedPaths`（去重、`isAbsolute`、`trim`），`opencode --dir` 只在有 `cwd` 时带（钉死 daemon 工作区，无 cwd 则省略）。
 
 - **权限**（`src/definition/permission.ts` + `src/core/run.ts`）：
 
@@ -395,21 +406,40 @@ import {
   pnpm build                        # 改 src 后必重编
   ```
 
-  `package.json` 为 `type:module`、`sideEffects:false`、`exports: {".": {import:"./dist/index.js"}}`、`bin: {agent-runtimes:"./dist/cli.js"}`。
+  `package.json` 为 `type:module`、`sideEffects:false`（零运行时依赖）、`exports` 含 `"."` 与 `"./package.json"`、`bin: {agent-runtimes:"dist/cli.js"}`、`files: ["dist","NOTICE"]`、`publishConfig: {access:"public", provenance:true}`。
 
-- **对外分享**：
+- **对外分享**（tag 驱动，`.github/workflows/publish.yml`）：
 
   ```bash
-  pnpm build
-  pnpm publish --access public   # 需 npm login；包名 agent-runtimes 需未被占
+  # 版本已 bump 且 main 上 CI 全绿：
+  git tag v0.1.2 && git push origin v0.1.2
+  # workflow 校验 tag == package.json 版本 → 跑门禁+测试 → npm publish --provenance --access public（已发过则跳过）
   ```
 
-  `files: ["dist"]` 保证仅 `dist/` 入包，源码不出包。建议加 `prepublishOnly: "pnpm build"` 防漏编。
+  包是 scoped（`@stratosphereslab/agent-runtimes`），`access:public` 必填否则 registry 拒绝。`prepublishOnly: "pnpm build"` 已配，防手发漏编。
 
 - **验包**：
   ```bash
   pnpm pack --dry-run   # 列出将发布的文件
   ```
+
+---
+
+## CLI 升级（零手改）
+
+`opencode`/`claude`/`codex` 发新版后，不需要改代码也能保持正确：比所有 `tested` 都新的版本默认放行，`doctor` 会明说（`1.18.32 (newer than tested 1.18.31 — fail-open)`）。升级后的例行动作只有两步：
+
+```bash
+pnpm compat:record         # 按 live 安装刷新 tested 表（只追加不删除）
+pnpm test tests/integration # 证明新 CLI 还能跑通一轮
+```
+
+只有两种情况需要人工介入：
+
+- **真坏了** → 加 `minimum` 地板，并在 `src/definition/compat.ts` 的 `VERSION_FLOORS` 里登记，`evidence` 指向复现的测试。没有证据的地板会被 `tests/compat.test.ts` 打回。
+- **想用新 flag**（比如 `--agent`）→ 先在 `--help` 里验证，再藏进 `buildArgs()`，并加入 `ADVISORY_PROBE_FLAGS`（`src/discovery/capabilities.ts`）。
+
+没坏 + 不用新 flag = 零 diff。这就是契约（`src/definition/version.ts`）。
 
 ---
 
@@ -436,15 +466,15 @@ import {
 
 ## 发版
 
-- `main` 在 `v0.1.0` 后受保护，走 `feat/*` 分支 → PR，`Conventional Commits`（`feat:` 新能力、`fix:` 修解析/传输、`ci:` 工作流、`docs:` 文档）。
+- `v1.0.0` 前允许直推 `main`（见 `AGENTS.md`），但一律 `Conventional Commits`（`feat:` 新能力、`fix:` 修解析/传输、`ci:` 工作流、`docs:` 文档），保持历史可发版。首个 major 后切受保护 `main` + `feat/*` → PR。
 - 合前：`pnpm build && pnpm lint && pnpm typecheck && pnpm test` 本地与 CI `6/6` 绿。
-- 打 tag 与发包：
+- 打 tag 与发包（自动化，勿手发）：
   ```bash
-  npm version patch|minor|major -m "chore: release %s"
-  git push --follow-tags
-  npm publish --access public  # 或 pnpm publish
-  # tag 即 GitHub Release；CI 不自动发（需另加 publish.yml 再做）
+  npm version patch|minor|major -m "chore: release %s"  # 升 package.json（+ lockfile）
+  git push --follow-tags                                 # tag vX.Y.Z 触发 publish.yml
+  # publish.yml：tag == 版本校验 → 门禁 → npm publish --provenance --access public
   ```
+- registry 永不覆盖：发已存在的版本是跳过不是报错——每次发版必先升版本。
 
 ---
 

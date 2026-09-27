@@ -40,6 +40,8 @@ Typical output — three events, each stamped with the run id:
 
 - One active run per session — a second `run()` while one is in flight
   rejects instead of silently cancelling the first.
+- Drain run N to `done` before starting run N+1 — otherwise resume would
+  silently open a fresh session and the library rejects loudly instead.
 - `run.cancel()` ends the stream with a terminal `done`; `close()` alone
   is silent teardown.
 - Thinking arrives as `reasoning_delta`, never mixed into `text_delta`.
@@ -50,9 +52,9 @@ Typical output — three events, each stamped with the run id:
   `opencode`, `opencode-acp`, `claude`, `codex`.
 - Process exits non-zero — you get an `error` event, then `done`. The
   message carries the cause, never secrets.
-- Full error catalog: [Resources](../resources/errors.md).
+- Full error catalog: [frontend.md](../../frontend.md#error-codes-machine-readable-never-string-match).
 
 ## Next
 
-- [Core model](../concepts/core-model.md) — what Runtime/Session/Run actually are.
-- [Streaming](../running/runs-streaming.md) — every event type, permissions, usage.
+- [Architecture](../../architecture.md) — what Runtime/Session/Run actually are.
+- [Frontend contract](../../frontend.md) — every event type, permissions, usage.
