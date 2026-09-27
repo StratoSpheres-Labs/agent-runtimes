@@ -69,11 +69,11 @@ async function main(): Promise<void> {
   console.log("exit:", code);
 
   // High-level Session demo — now wired to real opencode via OpencodeRuntime
-  // Use a free model so `pnpm example` works without quota (opencode/mimo-v2.5-free)
+  // Use a free model so `pnpm example` works without quota (opencode/mimo-v2.6-flash-free)
   const opencodeRuntime = new OpencodeRuntime();
   const session = await opencodeRuntime.createSession({
     cwd: process.cwd(),
-    model: "opencode/mimo-v2.5-free",
+    model: "opencode/mimo-v2.6-flash-free",
   });
   console.log("session:", session.id);
   const run = await session.run("hello from session");

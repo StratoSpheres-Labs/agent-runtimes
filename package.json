@@ -9,7 +9,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/StratoSpheres-Labs/agent-runtimes.git"
+    "url": "git+https://github.com/StratoSpheres-Labs/agent-runtimes.git"
   },
   "keywords": [
     "agent",
@@ -24,17 +24,23 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "agent-runtimes": "./dist/cli.js"
+    "agent-runtimes": "dist/cli.js"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "NOTICE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -47,7 +53,8 @@
     "typecheck": "tsc --noEmit",
     "example": "tsx examples/basic.ts",
     "test:e2e:round1": "tsx test/e2e-round1.ts",
-    "test:e2e:round2": "tsx test/e2e-round2.ts"
+    "test:e2e:round2": "tsx test/e2e-round2.ts",
+    "compat:record": "tsx scripts/compat-record.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -60,5 +67,15 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.24.0",
     "vitest": "^3.0.0"
-  }
+  },
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "test": "tests"
+  },
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/StratoSpheres-Labs/agent-runtimes/issues"
+  },
+  "homepage": "https://github.com/StratoSpheres-Labs/agent-runtimes#readme"
 }

@@ -47,8 +47,11 @@ jobs:
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
-      # Full tests already gate every push/PR via ci.yml; publish re-runs
-      # only the fast static gates to keep releases snappy.
+      # Tags do not trigger ci.yml, so a tag pushed alongside (or ahead of)
+      # the commit would otherwise publish untested code. The suite is
+      # CLI-optional (live tests skip gracefully when no agent is
+      # installed), so it is safe to run here on a bare runner.
+      - run: pnpm test
 
       # Idempotency: re-pushing a tag (or a manual publish beating the
       # workflow to it) must skip, not fail — the registry rejects

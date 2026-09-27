@@ -21,6 +21,13 @@
     "noUnusedParameters": false,
     "allowImportingTsExtensions": false
   },
-  "include": ["src/**/*", "tests/**/*", "examples/**/*", "runtimes/**/*", "test/**/*"],
+  "include": [
+    "src/**/*",
+    "tests/**/*",
+    "examples/**/*",
+    "runtimes/**/*",
+    "test/**/*",
+    "scripts/**/*"
+  ],
   "exclude": ["dist", "node_modules"]
 }
