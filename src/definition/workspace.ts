@@ -14,9 +14,35 @@ export interface WorkspaceOptions {
   dangerouslySkipPermissions?: boolean;
   /** Codex sandbox — new `codex exec --sandbox <mode>` / resume `-c sandbox_mode="..."`. */
   sandboxMode?: string;
+  /**
+   * Route approval requests through automatic review (codex
+   * `--approve-for-me`: reviewer agent + forced `workspace-write` +
+   * `on-request` policy). Approval delegation, not a permission grant —
+   * sandbox boundaries stay intact. Mutually exclusive with `sandboxMode`
+   * and `dangerouslySkipPermissions` (the CLI rejects the combination);
+   * create-only (`exec resume` has no such flag).
+   */
+  autoReview?: boolean;
 }
 
 import { isAbsolute, resolve } from "node:path";
+
+/**
+ * Whether the workspace bag carries anything an adapter would need to
+ * act on. Adapters with no (or partial) native wiring use this to reject
+ * unsupported fields loudly instead of silently ignoring them — see
+ * `assertWorkspaceFieldsSupported` (src/definition/session-inputs.ts).
+ */
+export function hasWorkspaceFields(workspace: WorkspaceOptions | undefined): boolean {
+  if (!workspace) return false;
+  return (
+    (workspace.allowedPaths?.length ?? 0) > 0 ||
+    workspace.permissionMode !== undefined ||
+    workspace.dangerouslySkipPermissions === true ||
+    workspace.sandboxMode !== undefined ||
+    workspace.autoReview === true
+  );
+}
 
 /**
  * Normalize allowed paths — resolve against cwd (or process.cwd()), dedupe,

@@ -10,7 +10,7 @@ import type { RuntimeCapabilities } from "../definition/capability.js";
 
 export async function probeHelpFlags(
   command: string,
-  flags: string[],
+  flags: readonly string[],
   helpArgs: string[] = ["--help"],
 ): Promise<Record<string, boolean>> {
   const helpText = await getHelpText(command, helpArgs);
@@ -36,6 +36,32 @@ async function getHelpText(command: string, helpArgs: string[]): Promise<string>
   if (res.timedOut) return "";
   return res.stdout + res.stderr;
 }
+
+/**
+ * Help flags worth probing, shared by `DefaultRuntime.probeFlags()` and the
+ * doctor Flags row. Only flags this library actually verified live may be
+ * added here — never speculative ones (an unobserved flag would let the
+ * probe bless a channel that doesn't exist). Bare `-p` is deliberately
+ * absent: substring matching would false-positive on `--port` etc.
+ */
+export const ADVISORY_PROBE_FLAGS: readonly string[] = [
+  "--resume",
+  "--session",
+  "resume",
+  "--model",
+  "--output-format stream-json",
+  "--add-dir",
+  "--dir",
+  "--permission-mode",
+  "--dangerously-skip-permissions",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--allowedTools",
+  "--sandbox",
+  "-C",
+  "--agent",
+  "--profile",
+  "--variant",
+];
 
 /**
  * Map help flags to RuntimeCapabilities overrides.

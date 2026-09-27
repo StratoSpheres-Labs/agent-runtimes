@@ -14,6 +14,7 @@ function shortVersion(raw: string): string {
 import { agentSearchDirs } from "./discovery/executable.js";
 import type { InstalledCopy } from "./discovery/installs.js";
 import { fetchLatestVersion, updateAvailable } from "./discovery/updates.js";
+import { ADVISORY_PROBE_FLAGS } from "./discovery/capabilities.js";
 
 export type DoctorStatus = "ok" | "warn" | "fail";
 
@@ -158,6 +159,16 @@ export async function doctor(
           detail: `${status.version}${suffix} — ${assessment.detail}`,
           reason: "untested-version",
         });
+      } else if (assessment.ahead) {
+        // Newer than every tested build: still ok (fail-open), but say so —
+        // staleness is visible without nagging, and nobody has to wonder
+        // whether the `tested` table needs a hand edit (it doesn't).
+        checks.push({
+          name: "Version",
+          status: suffix ? "warn" : "ok",
+          detail: `${status.version}${suffix} (newer than tested ${assessment.ahead} — fail-open)`,
+          ...(suffix ? { reason: "update-available" as const } : {}),
+        });
       } else if (suffix) {
         checks.push({
           name: "Version",
@@ -215,6 +226,24 @@ export async function doctor(
             reason: "shim-broken",
           },
     );
+  }
+
+  // Advisory help-flag inventory (never a warning): shows which channels
+  // the installed CLI actually advertises, so capability staleness is
+  // visible without anyone hand-editing version tables. Skipped when the
+  // runtime is missing or the probe yields nothing.
+  if (status?.installed) {
+    const probed = await safe<Record<string, boolean>>(
+      async () => (await runtime.probeFlags?.(ADVISORY_PROBE_FLAGS, status.executable)) ?? {},
+    );
+    const hits = ADVISORY_PROBE_FLAGS.filter((f) => probed.value?.[f] === true);
+    if (hits.length > 0) {
+      checks.push({
+        name: "Flags",
+        status: "ok",
+        detail: `${String(hits.length)}/${String(ADVISORY_PROBE_FLAGS.length)} advertised: ${hits.join(", ")}`,
+      });
+    }
   }
 
   const authed = await safe(() => runtime.auth());
@@ -380,11 +409,14 @@ async function pendingUpdateSuffix(
  * judgment is impossible: no policy, unparseable version, or newer than all
  * tested → ok. Warns only on evidence: below the hard floor, or older than
  * every tested build (which may predate flags this library relies on).
+ * A newer-than-tested install returns ok *with* the tested list attached, so
+ * the Version row can say so — the `tested` table going stale is visible,
+ * never a warning, and never a reason to hand-edit it on upgrade.
  */
 function assessCliVersion(
   policy: VersionPolicy | undefined,
   version: string,
-): { ok: true } | { ok: false; detail: string } {
+): { ok: true; ahead?: string } | { ok: false; detail: string } {
   if (!policy) return { ok: true };
   const current = parseSemver(version);
   if (policy.minimum) {
@@ -402,6 +434,9 @@ function assessCliVersion(
     );
     if (max && compareSemver(current, max) < 0) {
       return { ok: false, detail: `older than tested (${tested.join(", ")})` };
+    }
+    if (max && compareSemver(current, max) > 0) {
+      return { ok: true, ahead: tested.join(", ") };
     }
   }
   return { ok: true };

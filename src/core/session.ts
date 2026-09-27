@@ -1,5 +1,8 @@
 import { RuntimeSessionError } from "./errors.js";
 import { DefaultRun, type AgentRun } from "./run.js";
+import type { ReasoningOptions } from "../definition/reasoning.js";
+import type { PromptContent } from "../definition/content.js";
+import { splitPromptContent } from "../definition/content.js";
 import type { ImageInput } from "../definition/image.js";
 import type { McpServer } from "../definition/mcp.js";
 import type { HistoryOptions, TranscriptEntry } from "../definition/transcript.js";
@@ -17,10 +20,12 @@ export interface AgentSession {
   /**
    * Start one turn. At most one Run is active per session: a second `run()`
    * while the previous one is still going rejects with
-   * `RuntimeSessionError` (never silently cancels it) — await the first
-   * run's `result()` or `cancel()` it explicitly, then call again.
+   * `RuntimeSessionError` (never silently cancels it) — drain the first
+   * run's `done` event (or await its `result()` / `cancel()` it), then
+   * call again. The gate opens on the turn's `done`, not on process
+   * exit, so back-to-back turns never stall on a lingering child.
    */
-  run(prompt: string, options?: SessionRunOptions): Promise<AgentRun>;
+  run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun>;
   cancel(): Promise<void>;
   close(): Promise<void>;
   /**
@@ -37,6 +42,20 @@ export interface SessionRunOptions {
   timeout?: number;
   /** Phase 26: images for this turn (path-primary, agent-agnostic). */
   images?: ImageInput[];
+  /**
+   * Per-run model override (falls back to the session model). Validated
+   * against the primed catalog like the session model — an unknown id
+   * rejects before anything spawns.
+   */
+  model?: string;
+  /** Per-run reasoning override (falls back to the session reasoning). */
+  reasoning?: ReasoningOptions;
+  /**
+   * Opt into mid-run input: keeps the input channel open so `run.send()`
+   * can append follow-up text while the turn is in flight. Runtimes with
+   * no `send()` channel (opencode, claude, codex) reject this flag loudly.
+   */
+  allowMidRunInput?: boolean;
 }
 
 export interface SessionOptions {
@@ -50,7 +69,7 @@ export interface SessionOptions {
    */
   runFactory?: (
     id: string,
-    prompt: string,
+    prompt: PromptContent,
     opts: SessionRunOptions,
   ) => AgentRun | Promise<AgentRun>;
 }
@@ -79,17 +98,17 @@ export class DefaultSession implements AgentSession {
     this.runFactory = options.runFactory;
   }
 
-  public async run(prompt: string, options?: SessionRunOptions): Promise<AgentRun> {
+  public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
     if (this.closed) {
       throw new RuntimeSessionError(`Session ${this.id} is closed`);
     }
-    assertPromptWithinHardBudget(prompt);
+    assertPromptWithinHardBudget(splitPromptContent(prompt).text);
     // One active Run at a time: never silently cancel the previous one —
     // reject loudly so no turn is lost without the caller knowing.
     if (this.currentRun && !this.currentRun.done) {
       throw new RuntimeSessionError(
         `Session ${this.id} already has an active run (${this.currentRun.id}) — ` +
-          `await its result() or cancel() it before starting another`,
+          `drain its done event (or await its result() / cancel() it) before starting another`,
         { runtime: "session" },
       );
     }
@@ -102,7 +121,8 @@ export class DefaultSession implements AgentSession {
     } else {
       // Core stub: spawn a portable no-op process that consumes prompt via stdin.
       // Real adapters (runtimes/opencode) will inject their own factory with buildArgs().
-      const stdinData = prompt;
+      // Image parts have no delivery channel in the stub and are dropped (test-only path).
+      const stdinData = splitPromptContent(prompt).text;
       run = new DefaultRun(runId, {
         command: process.execPath,
         args: [

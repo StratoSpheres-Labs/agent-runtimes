@@ -19,6 +19,19 @@ import { RuntimeProtocolError } from "./core/errors.js";
 
 export type WireCreateSessionOptions = Omit<CreateSessionOptions, "onPermissionRequest">;
 
+/**
+ * Mid-run steering across the wire (BFF → agent backend). The frontend
+ * sends `{ runId, text }` upstream (SSE POST / WebSocket message / IPC);
+ * the backend routes it to the live run's `send()`. Text-only: prompt
+ * images are not JSON-safe (`Uint8Array` payloads) and stay backend-side.
+ * Unknown `runId`s and runs without `allowMidRunInput` reject loudly —
+ * never silently dropped.
+ */
+export interface WireSendInput {
+  runId: string;
+  text: string;
+}
+
 const EVENT_TYPES = new Set([
   "session_started",
   "text_delta",
@@ -27,6 +40,7 @@ const EVENT_TYPES = new Set([
   "tool_finished",
   "usage",
   "permission_request",
+  "permission_denied",
   "error",
   "done",
 ]);

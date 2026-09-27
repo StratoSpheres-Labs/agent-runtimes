@@ -4,6 +4,12 @@
  * Only encode what was actually observed: `tested` lists CLI versions this
  * library verified against (fixtures/live runs), `minimum` is a hard floor
  * with a cited reason. Absent policy means "can't judge" — never warn.
+ *
+ * Zero-touch upgrade contract: a CLI newer than every `tested` entry is
+ * always ok (fail-open — the doctor Version row says so explicitly). Never
+ * hand-edit `tested` on upgrade; run `pnpm compat:record` to refresh it
+ * mechanically, and only add `minimum` on observed breakage with a
+ * fixture/test proving it (see `VERSION_FLOORS`).
  */
 export interface VersionPolicy {
   /** Hard floor, e.g. codex `"0.143.0"`. Below it → warn. */

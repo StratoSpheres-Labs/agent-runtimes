@@ -13,6 +13,36 @@ export interface RuntimeCapabilities {
   reasoning: boolean;
   /** Accepts image inputs */
   images: boolean;
-  /** Exposes workspace allowlist / permission / sandbox gating */
+  /**
+   * Exposes workspace allowlist / permission / sandbox gating.
+   * False means `workspace` inputs are rejected loudly at session
+   * creation (never silently ignored) — see `hasWorkspaceFields`.
+   */
   workspace: boolean;
+  /** Select a named agent/persona (opencode `--agent`) */
+  agentSelection: boolean;
+  /** Append input while a run is in flight (`run.send()`) */
+  midRunInput: boolean;
+  /** Seed a fresh session with prior messages (`seedMessages`) */
+  historySeed: boolean;
+  /** Caller-supplied system prompt */
+  systemPrompt: boolean;
+  /** Caller-supplied output token budget (`maxTokens`) */
+  maxTokens: boolean;
+  /**
+   * Caller-supplied cost budget in USD (`maxBudgetUsd`, claude
+   * `--max-budget-usd`). Cost, not tokens — never conflate the two.
+   */
+  costBudget: boolean;
+  /**
+   * Caller-supplied JSON Schema constraining the final message
+   * (`outputSchema`: codex `--output-schema` file, claude `--json-schema`
+   * inline). The constrained text still arrives as `text_delta` — callers
+   * `JSON.parse` it; the channel only raises the hit rate, never a type.
+   */
+  structuredOutput: boolean;
+  /** Caller-supplied tool allowlist (`allowedTools`) */
+  toolAllowlist: boolean;
+  /** Select a named config profile (codex `-p/--profile`) */
+  profileSelection: boolean;
 }

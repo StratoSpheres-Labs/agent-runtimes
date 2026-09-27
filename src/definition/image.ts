@@ -17,9 +17,17 @@ export interface ImageInput {
 }
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, extname, isAbsolute, resolve } from "node:path";
+import { basename, extname, isAbsolute, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/**
+ * Cap on image bytes read into memory (path reads and inline `data`
+ * alike). Unbounded `readFileSync` + base64 (+33%) lets one large file
+ * OOM the host or blow the agent pipe; the prompt byte budget covers
+ * text only, so images get their own ceiling.
+ */
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export function imageMimeFromPath(path: string, fallback = "image/png"): string {
   const ext = extname(path).toLowerCase();
@@ -41,6 +49,11 @@ export function imageToBase64(img: ImageInput, cwd?: string): { base64: string; 
     const abs = isAbsolute(img.path) ? img.path : resolve(cwd ?? process.cwd(), img.path);
     if (!existsSync(abs)) throw new Error(`Image file not found: ${abs}`);
     const data = readFileSync(abs);
+    if (data.length > MAX_IMAGE_BYTES) {
+      throw new Error(
+        `Image file too large: ${abs} (${String(data.length)} bytes > ${String(MAX_IMAGE_BYTES)} byte cap)`,
+      );
+    }
     const mime = img.mimeType ?? imageMimeFromPath(abs);
     return { base64: data.toString("base64"), mimeType: mime };
   }
@@ -71,8 +84,20 @@ export function stageImageToTempFile(
       img.filename ??
       `agent-runtimes-img-${hint}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}${ext}`;
     const file = join(tmpdir(), name);
+    // Caller-supplied filenames are untrusted: `../../x` would escape the
+    // staging dir into an arbitrary-file write. Containment check (keeps
+    // unicode names working, unlike a charset allowlist).
+    const contained = resolve(tmpdir()) + sep;
+    if (!resolve(file).startsWith(contained)) {
+      throw new Error(`Image filename escapes the staging dir: ${name}`);
+    }
     const bytes =
       typeof img.data === "string" ? Buffer.from(img.data, "base64") : Buffer.from(img.data);
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      throw new Error(
+        `Inline image too large: ${String(bytes.length)} bytes > ${String(MAX_IMAGE_BYTES)} byte cap`,
+      );
+    }
     writeFileSync(file, bytes);
     return file;
   }

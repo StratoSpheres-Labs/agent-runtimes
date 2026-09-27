@@ -12,6 +12,22 @@ export type { RuntimeModel, ModelDefinition, ModelReasoningOption } from "./defi
 export type { VersionPolicy } from "./definition/version.js";
 export { sanitizeModelId } from "./definition/model.js";
 export type { ReasoningEffort, ReasoningOptions } from "./definition/reasoning.js";
+export type {
+  PromptContent,
+  PromptImagePart,
+  PromptPart,
+  PromptTextPart,
+  SplitPrompt,
+} from "./definition/content.js";
+export { splitPromptContent, foldSeedMessages } from "./definition/content.js";
+export type { SeedMessage, SessionInputRequest } from "./definition/session-inputs.js";
+export {
+  assertSessionInputsSupported,
+  assertWorkspaceFieldsSupported,
+  sanitizeConfigId,
+  sanitizeToolName,
+} from "./definition/session-inputs.js";
+export { hasWorkspaceFields } from "./definition/workspace.js";
 export type { McpServer, McpServerInfo } from "./definition/mcp.js";
 export type { RuntimeSkill } from "./definition/skill.js";
 export type { RuntimePlugin } from "./definition/plugin.js";
@@ -73,14 +89,17 @@ export {
 export type { ProcessExit, ProcessState, SpawnOptions } from "./core/lifecycle.js";
 export { RuntimeProcess } from "./core/lifecycle.js";
 export type { AgentRun, RunOptions } from "./core/run.js";
+export type { SessionRunOptions } from "./core/session.js";
 export { DefaultRun } from "./core/run.js";
 export { DefaultSession } from "./core/session.js";
+export { NativeIdResumeGuard } from "./core/resume-guard.js";
 
 // Events
 export type {
   DoneEvent,
   ErrorEvent,
   JsonValue,
+  PermissionDeniedEvent,
   PermissionRequestEvent,
   ReasoningDeltaEvent,
   RunScoped,
@@ -91,10 +110,10 @@ export type {
   ToolStartedEvent,
   UsageEvent,
 } from "./events/index.js";
-export { asJsonValue, EventStream } from "./events/index.js";
+export { asJsonValue, EventStream, MAX_STREAM_QUEUE_LENGTH } from "./events/index.js";
 
 // Frontend wire contract (JSON-only boundary: DTOs + NDJSON framing)
-export type { WireCreateSessionOptions } from "./wire.js";
+export type { WireCreateSessionOptions, WireSendInput } from "./wire.js";
 export { decodeRuntimeEventLine, encodeRuntimeEvent, isRuntimeEvent } from "./wire.js";
 
 // Transport / Parser
@@ -104,7 +123,7 @@ export { AcpTransport } from "./transport/acp.js";
 export type { AcpMessage, AcpRequestOptions, AcpMcpServer } from "./transport/acp.js";
 export { buildAcpMcpServers } from "./transport/acp.js";
 export type { RuntimeParser } from "./parser/parser.js";
-export { JsonlParser } from "./parser/jsonl.js";
+export { JsonlParser, MAX_PARSER_BUFFER_BYTES, bufferOverflowError } from "./parser/jsonl.js";
 export { AcpParser } from "./parser/acp.js";
 export { AcpRun } from "./core/acp-run.js";
 export type { AcpRunOptions } from "./core/acp-run.js";
@@ -121,7 +140,27 @@ export { userToolchainBinDirs, toolchainProbePaths } from "./discovery/toolchain
 export { resolveLaunch } from "./discovery/launch.js";
 export type { ResolvedLaunch } from "./discovery/launch.js";
 export { probeVersion } from "./discovery/version.js";
-export { probeHelpFlags, capabilitiesFromHelp } from "./discovery/capabilities.js";
+export {
+  probeHelpFlags,
+  capabilitiesFromHelp,
+  ADVISORY_PROBE_FLAGS,
+} from "./discovery/capabilities.js";
+export type { VersionFloor } from "./definition/compat.js";
+export {
+  VERSION_FLOORS,
+  floorsFor,
+  modelCliFloor,
+  evidenceMentionsMinimum,
+  isWellFormedTested,
+  testedOf,
+} from "./definition/compat.js";
+export {
+  normalizeObservedVersion,
+  mergeTestedVersions,
+  rewriteTestedArray,
+  recordFileFor,
+  RECORD_RUNTIME_IDS,
+} from "./discovery/compat-record.js";
 export { discoverModels } from "./discovery/models.js";
 export {
   assertKnownModel,
