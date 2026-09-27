@@ -1,5 +1,5 @@
 ﻿import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
@@ -72,16 +72,32 @@ describe("image helpers", () => {
           cwd,
         ),
       ).toThrow(/escapes the staging dir/);
-      expect(() =>
-        stageImageToTempFile(
+      // Backslash is a separator on Windows (escapes → throws) but an
+      // ordinary filename char on POSIX (stays contained → stages fine).
+      // Assert the platform's own semantics, not one fixed outcome.
+      if (process.platform === "win32") {
+        expect(() =>
+          stageImageToTempFile(
+            {
+              data: Buffer.from(tinyPngBase64, "base64"),
+              mimeType: "image/png",
+              filename: "..\\evil.png",
+            },
+            cwd,
+          ),
+        ).toThrow(/escapes the staging dir/);
+      } else {
+        const stagedBackslash = stageImageToTempFile(
           {
             data: Buffer.from(tinyPngBase64, "base64"),
             mimeType: "image/png",
             filename: "..\\evil.png",
           },
           cwd,
-        ),
-      ).toThrow(/escapes the staging dir/);
+        );
+        expect(resolve(stagedBackslash).startsWith(resolve(tmpdir()) + sep)).toBe(true);
+        rmSync(stagedBackslash, { force: true });
+      }
       // A plain hostile-but-contained name still stages inside tmpdir.
       const staged = stageImageToTempFile(
         { data: Buffer.from(tinyPngBase64, "base64"), mimeType: "image/png", filename: "evil.png" },
