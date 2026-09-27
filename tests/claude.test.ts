@@ -92,7 +92,14 @@ describe("claude buildArgs", () => {
 });
 
 describe("ClaudeParser fixtures", () => {
-  const fixtures = ["text.jsonl", "tool.jsonl", "mixed.jsonl", "user-tool-result.jsonl"] as const;
+  const fixtures = [
+    "text.jsonl",
+    "tool.jsonl",
+    "mixed.jsonl",
+    "user-tool-result.jsonl",
+    "permission-denied.jsonl",
+    "structured-output.jsonl",
+  ] as const;
   for (const name of fixtures) {
     it(`parses ${name} → RuntimeEvent`, () => {
       const raw = readFileSync(`runtimes/claude/fixtures/${name}`, "utf-8");
@@ -112,12 +119,77 @@ describe("ClaudeParser fixtures", () => {
           "done",
           "session_started",
           "permission_request",
+          "permission_denied",
           "usage",
         ]).toContain(e.type);
       }
       expect(all.length).toBeGreaterThan(0);
     });
   }
+
+  it("new shapes parse identically under CRLF line endings (checklist: \\r\\n variant)", () => {
+    // Windows CLIs emit \r\n; parsers split on \n + trim, so the new
+    // shapes must yield byte-identical events either way.
+    for (const name of ["permission-denied.jsonl", "structured-output.jsonl"] as const) {
+      const raw = readFileSync(`runtimes/claude/fixtures/${name}`, "utf-8");
+      const lf = [...new ClaudeParser().parse(enc(raw)), ...new ClaudeParser().flush()];
+      const crlfRaw = raw.replaceAll("\n", "\r\n");
+      const crlf = [...new ClaudeParser().parse(enc(crlfRaw)), ...new ClaudeParser().flush()];
+      expect(crlf).toEqual(lf);
+      expect(lf.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("system permission_denied → permission_denied with reason (verified live 2.1.278)", () => {
+    const p = new ClaudeParser();
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "permission_denied",
+      tool_name: "Write",
+      tool_use_id: "toolu_deny1",
+      decision_reason_type: "safetyCheck",
+      decision_reason: "write outside the working directory requires manual approval",
+      message: "write outside the working directory requires manual approval",
+    });
+    expect(p.parse(enc(line + "\n"))).toEqual([
+      {
+        type: "permission_denied",
+        id: "toolu_deny1",
+        toolName: "Write",
+        reason: "write outside the working directory requires manual approval",
+        kind: "safetyCheck",
+      },
+    ]);
+  });
+
+  it("permission_denied without reason still emits the denial fact", () => {
+    const p = new ClaudeParser();
+    const line = JSON.stringify({ type: "system", subtype: "permission_denied" });
+    const evs = p.parse(enc(line + "\n"));
+    expect(evs).toEqual([{ type: "permission_denied", id: "tool_0" }]);
+  });
+
+  it("StructuredOutput tool_use surfaces its input JSON as text (live 2.1.278)", () => {
+    const p = new ClaudeParser();
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", id: "toolu_so1", name: "StructuredOutput", input: { color: "blue" } },
+        ],
+      },
+    });
+    const evs = [...p.parse(enc(line + "\n")), ...p.flush()];
+    expect(evs).toEqual([{ type: "text_delta", text: '{"color":"blue"}' }]);
+  });
+
+  it("structured-output turn yields text + single finish + done, no duplicate", () => {
+    const raw = readFileSync("runtimes/claude/fixtures/structured-output.jsonl", "utf-8");
+    const p = new ClaudeParser();
+    const evs = [...p.parse(enc(raw)), ...p.flush()];
+    expect(evs.map((e) => e.type)).toEqual(["text_delta", "tool_finished", "usage", "done"]);
+    expect(evs[0]).toEqual({ type: "text_delta", text: '{"color":"blue"}' });
+  });
 
   it("assistant text → text_delta", () => {
     const p = new ClaudeParser();

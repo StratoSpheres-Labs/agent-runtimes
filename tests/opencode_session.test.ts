@@ -41,4 +41,44 @@ describe("OpencodeSession resume", () => {
     await sess.close();
     await sess.close(); // idempotent
   });
+
+  it("rejects a flag-shaped resumeSessionId at construction", async () => {
+    expect(
+      () =>
+        new OpencodeSession({
+          id: "evil",
+          command: process.execPath,
+          cwd,
+          resumeSessionId: "--dangerously-skip-permissions",
+        }),
+    ).toThrow(/resumeSessionId/);
+    const ok = new OpencodeSession({
+      id: "ok",
+      command: process.execPath,
+      cwd,
+      resumeSessionId: "ses_abc123",
+    });
+    expect(ok.nativeSessionId).toBe("ses_abc123");
+    await ok.close();
+  });
+
+  it("refuses a new run while the previous run was never drained (no silent fresh session)", async () => {
+    // W1: the native id is captured by the events wrapper — an undrained
+    // run 1 means run 2 would silently lose the resume. Fail loudly.
+    const sess = new OpencodeSession({
+      id: "w1",
+      command: "agent-runtimes-missing-xyz",
+      cwd,
+    });
+    const run1 = await sess.run("x"); // spawn fails async; stream ends error+done
+    await expect(sess.run("y")).rejects.toThrow(/not drained to done/);
+    // Drain run 1 to done (idless — the CLI died before session_started):
+    // a fresh start is now provably safe and allowed.
+    for await (const e of run1.events()) {
+      if (e.type === "done") break;
+    }
+    const run3 = await sess.run("z");
+    expect(run3.done).toBe(false);
+    await sess.close();
+  });
 });

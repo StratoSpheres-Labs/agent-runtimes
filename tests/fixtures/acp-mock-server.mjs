@@ -35,6 +35,12 @@ async function onRequest(id, method, params) {
     return;
   }
   if (method === "session/new") {
+    // "refuse-new" stays alive but rejects the handshake — exercises the
+    // client's start-failure cleanup (no zombie child allowed).
+    if (mode === "refuse-new") {
+      fail(id, -32600, "refusing session/new for test");
+      return;
+    }
     result(id, { sessionId: "ses_mock" });
     return;
   }

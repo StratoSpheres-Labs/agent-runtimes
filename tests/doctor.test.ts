@@ -23,6 +23,7 @@ import type { McpServerInfo } from "../src/definition/mcp.js";
 import type { RuntimeSkill } from "../src/definition/skill.js";
 import type { RuntimePlugin } from "../src/definition/plugin.js";
 import type { InstalledCopy } from "../src/discovery/installs.js";
+import { ADVISORY_PROBE_FLAGS } from "../src/discovery/capabilities.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -155,6 +156,27 @@ describe("cli main()", () => {
     await expect(main(["doctor", "definitely-not-a-runtime"])).resolves.toBe(1);
     expect(err.mock.calls.join("\n")).toContain("error:");
   });
+
+  it("routes -d/--doctor to the same doctor path (exit 1 on unknown id)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(main(["-d", "definitely-not-a-runtime"])).resolves.toBe(1);
+    await expect(main(["--doctor", "definitely-not-a-runtime"])).resolves.toBe(1);
+    expect(err.mock.calls.join("\n")).toContain("error:");
+  });
+
+  it("exits 2 with usage when the flag has no id", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await expect(main(["-d"])).resolves.toBe(2);
+    await expect(main(["--doctor"])).resolves.toBe(2);
+    expect(log.mock.calls.join("\n")).toContain("Usage:");
+  });
+
+  it("exits 0 with usage on -h/--help", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await expect(main(["-h"])).resolves.toBe(0);
+    await expect(main(["--help"])).resolves.toBe(0);
+    expect(log.mock.calls.join("\n")).toContain("Usage:");
+  });
 });
 
 const ALL_CAPS: RuntimeCapabilities = {
@@ -164,6 +186,15 @@ const ALL_CAPS: RuntimeCapabilities = {
   reasoning: true,
   images: true,
   workspace: true,
+  agentSelection: true,
+  midRunInput: true,
+  historySeed: true,
+  systemPrompt: true,
+  maxTokens: true,
+  costBudget: true,
+  structuredOutput: true,
+  toolAllowlist: true,
+  profileSelection: true,
 };
 
 function healthyStub(): AgentRuntime {
@@ -360,11 +391,41 @@ describe("doctor() reason codes (stub runtimes, no CLI)", () => {
     // Newer than everything tested fails open (never punish upgrades).
     const newer = await doctor("stub", fakeRegistry(at("codex-cli 0.999.0")));
     expect(reasonOf(newer, "Version")).toBeUndefined();
+    // ...and says so explicitly: staleness is visible, never a warning.
+    const newerRow = newer.checks.find((c) => c.name === "Version");
+    expect(newerRow?.status).toBe("ok");
+    expect(newerRow?.detail).toBe("codex-cli 0.999.0 (newer than tested 0.150.1 — fail-open)");
 
     // No policy means can't judge — always ok.
     const bare = healthyStub();
     bare.detect = () =>
       Promise.resolve({ installed: true, executable: "/usr/bin/stub", version: "0.0.1" });
     expect(reasonOf(await doctor("stub", fakeRegistry(bare)), "Version")).toBeUndefined();
+  });
+
+  it("lists probed help flags on a Flags row, skips it without a probe", async () => {
+    const probed = healthyStub();
+    const seen: Array<{ flags: readonly string[]; exe?: string }> = [];
+    probed.probeFlags = (flags, exe) => {
+      seen.push({ flags, exe });
+      return Promise.resolve({ "--add-dir": true, "--sandbox": true });
+    };
+    const withFlags = await doctor("stub", fakeRegistry(probed));
+    const row = withFlags.checks.find((c) => c.name === "Flags");
+    expect(row?.status).toBe("ok");
+    expect(row?.detail).toContain("--add-dir");
+    expect(row?.detail).toContain("--sandbox");
+    expect(reasonOf(withFlags, "Flags")).toBeUndefined();
+    // Doctor passes the detected absolute path (bare names miss PATH-less installs).
+    expect(seen).toEqual([{ flags: ADVISORY_PROBE_FLAGS, exe: "/usr/bin/stub" }]);
+
+    // No probeFlags slot (or empty hits) → no Flags row, never an error.
+    const plain = await doctor("stub", fakeRegistry(healthyStub()));
+    expect(plain.checks.find((c) => c.name === "Flags")).toBeUndefined();
+    const empty = healthyStub();
+    empty.probeFlags = () => Promise.resolve({});
+    expect(
+      (await doctor("stub", fakeRegistry(empty))).checks.find((c) => c.name === "Flags"),
+    ).toBeUndefined();
   });
 });

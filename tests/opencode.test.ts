@@ -87,6 +87,7 @@ describe("OpencodeParser fixtures", () => {
     "real-opencode.jsonl",
     "tool_use.jsonl",
     "tool-completed.jsonl",
+    "permission-denied.jsonl",
   ] as const;
 
   for (const name of fixtures) {
@@ -108,6 +109,7 @@ describe("OpencodeParser fixtures", () => {
           "error",
           "done",
           "session_started",
+          "permission_denied",
         ]).toContain(e.type);
       }
       // Empty fixture should yield 0 events
@@ -118,6 +120,15 @@ describe("OpencodeParser fixtures", () => {
       }
     });
   }
+
+  it("permission-denied parses identically under CRLF line endings (checklist: \\r\\n variant)", () => {
+    const raw = readFileSync("runtimes/opencode/fixtures/permission-denied.jsonl", "utf-8");
+    const lf = [...new OpencodeParser().parse(enc(raw)), ...new OpencodeParser().flush()];
+    const crlfRaw = raw.replaceAll("\n", "\r\n");
+    const crlf = [...new OpencodeParser().parse(enc(crlfRaw)), ...new OpencodeParser().flush()];
+    expect(crlf).toEqual(lf);
+    expect(lf.length).toBeGreaterThan(0);
+  });
 
   it("handles opencode tool alias across chunk boundary", () => {
     const p = new OpencodeParser();
@@ -279,6 +290,74 @@ describe("OpencodeParser fixtures", () => {
     if (first?.type === "error") {
       expect(first.error.message).toContain("credit insufficient");
     }
+  });
+
+  it("maps headless-reject refusals to permission_denied (live 1.18.32)", () => {
+    const p = new OpencodeParser();
+    const line = JSON.stringify({
+      type: "tool_use",
+      part: {
+        type: "tool",
+        tool: "edit",
+        callID: "call_deny1",
+        state: {
+          status: "error",
+          input: { filePath: "note.txt" },
+          error: "The user rejected permission to use this specific tool call.",
+        },
+      },
+    });
+    const evs = p.parse(enc(line + "\n"));
+    expect(evs.map((e) => e.type)).toEqual(["tool_started", "tool_finished", "permission_denied"]);
+    const denied = evs[2];
+    expect(denied).toMatchObject({
+      type: "permission_denied",
+      id: "call_deny1",
+      toolName: "edit",
+      reason: "The user rejected permission to use this specific tool call.",
+      kind: "reject",
+    });
+  });
+
+  it("strips the ruleset JSON off deny-rule refusals, keeps kind=deny", () => {
+    const p = new OpencodeParser();
+    const line = JSON.stringify({
+      type: "tool_use",
+      part: {
+        type: "tool",
+        tool: "bash",
+        callID: "call_deny2",
+        state: {
+          status: "error",
+          error:
+            'The user has specified a rule which prevents you from using this specific tool call. Rules: [{"tool":"bash","action":"deny"}]',
+        },
+      },
+    });
+    const denied = p.parse(enc(line + "\n")).find((e) => e.type === "permission_denied");
+    expect(denied).toMatchObject({
+      id: "call_deny2",
+      toolName: "bash",
+      reason:
+        "The user has specified a rule which prevents you from using this specific tool call.",
+      kind: "deny",
+    });
+  });
+
+  it("ordinary tool errors never become permission_denied", () => {
+    const p = new OpencodeParser();
+    const line = JSON.stringify({
+      type: "tool_use",
+      part: {
+        type: "tool",
+        tool: "bash",
+        callID: "call_err",
+        state: { status: "error", error: "exit code 1: boom" },
+      },
+    });
+    const evs = p.parse(enc(line + "\n"));
+    expect(evs.map((e) => e.type)).toEqual(["tool_started", "tool_finished"]);
+    expect(evs[evs.length - 1]).toMatchObject({ type: "tool_finished", error: true });
   });
 
   it("emits no terminal done mid-stream across a multi-step run", () => {

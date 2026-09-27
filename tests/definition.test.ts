@@ -15,6 +15,15 @@ describe("RuntimeDefinition", () => {
         reasoning: true,
         images: false,
         workspace: false,
+        agentSelection: false,
+        midRunInput: false,
+        historySeed: false,
+        systemPrompt: false,
+        maxTokens: false,
+        costBudget: false,
+        structuredOutput: false,
+        toolAllowlist: false,
+        profileSelection: false,
       },
       session: { persistent: true },
     };
@@ -30,6 +39,15 @@ describe("RuntimeDefinition", () => {
       reasoning: false,
       images: false,
       workspace: false,
+      agentSelection: false,
+      midRunInput: false,
+      historySeed: false,
+      systemPrompt: false,
+      maxTokens: false,
+      costBudget: false,
+      structuredOutput: false,
+      toolAllowlist: false,
+      profileSelection: false,
     };
     // Rule 6: don't branch on id; branch on capability
     const canResume = caps.sessionResume;

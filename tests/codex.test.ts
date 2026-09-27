@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,8 +7,10 @@ import {
   codexDefinition,
   resolveCodexLaunch,
   resolveCodexSandboxMode,
+  writeCodexSchemaFile,
 } from "../runtimes/codex/definition.js";
 import { CodexParser } from "../runtimes/codex/parser.js";
+import { CodexSession } from "../runtimes/codex/session.js";
 
 function enc(s: string): Uint8Array {
   return new TextEncoder().encode(s);
@@ -74,6 +76,73 @@ describe("codex buildArgs", () => {
     ]);
   });
 
+  it("approveForMe replaces --sandbox (forced workspace-write, verified flag)", () => {
+    // win32 default would be danger-full-access — the flag owns the mode.
+    const args = buildCodexArgs({ approveForMe: true });
+    expect(args).toContain("--approve-for-me");
+    expect(args).not.toContain("--sandbox");
+    expect(args).toEqual(
+      expect.arrayContaining(["-c", "sandbox_workspace_write.network_access=true"]),
+    );
+  });
+
+  it("approveForMe conflicts with sandboxMode/dangerouslySkipPermissions", () => {
+    expect(() => buildCodexArgs({ approveForMe: true, sandboxMode: "read-only" })).toThrow(
+      /conflicts with sandboxMode/,
+    );
+    expect(() => buildCodexArgs({ approveForMe: true, dangerouslySkipPermissions: true })).toThrow(
+      /conflicts with dangerouslySkipPermissions/,
+    );
+    expect(() => buildCodexArgs({ resumeThreadId: "thr_1", approveForMe: true })).toThrow(
+      /create-only inputs/,
+    );
+  });
+
+  it("outputSchemaFile rides --output-schema on both branches", () => {
+    expect(buildCodexArgs({ outputSchemaFile: "/tmp/s.json" })).toEqual(
+      expect.arrayContaining(["--output-schema", "/tmp/s.json"]),
+    );
+    expect(buildCodexArgs({ resumeThreadId: "thr_1", outputSchemaFile: "/tmp/s.json" })).toEqual(
+      expect.arrayContaining(["--output-schema", "/tmp/s.json", "thr_1"]),
+    );
+    expect(buildCodexArgs({})).not.toContain("--output-schema");
+  });
+
+  it("stages the schema file on first run and deletes it on close", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "agent-runtimes-codex-schema-"));
+    try {
+      const sess = new CodexSession({
+        id: "schema_sess",
+        command: process.execPath,
+        cwd,
+        outputSchema: '{"type":"object"}',
+      });
+      // Spawns node with codex argv (exits fast); staging happens pre-spawn.
+      const run = await sess.run("hi");
+      await run.result();
+      const file = (sess as unknown as { schemaConfigFile: string | null }).schemaConfigFile;
+      expect(typeof file).toBe("string");
+      expect(existsSync(file as string)).toBe(true);
+      expect(readFileSync(file as string, "utf-8")).toBe('{"type":"object"}');
+      await sess.close();
+      expect(existsSync(file as string)).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("writeCodexSchemaFile writes unique content files", () => {
+    const a = writeCodexSchemaFile("{}", "hint");
+    const b = writeCodexSchemaFile("{}", "hint");
+    try {
+      expect(a).not.toBe(b);
+      expect(readFileSync(a, "utf-8")).toBe("{}");
+    } finally {
+      rmSync(a, { force: true });
+      rmSync(b, { force: true });
+    }
+  });
+
   it("model and sandbox are forwarded", () => {
     expect(buildCodexArgs({ model: "o4-mini", sandboxMode: "workspace-write" })).toEqual([
       "exec",
@@ -137,9 +206,15 @@ describe("codex buildArgs", () => {
     expect(args).not.toContain("--sandbox");
   });
 
-  it("resume never carries -C (rejected by exec resume)", () => {
-    const args = buildCodexArgs({ resumeThreadId: "thr_123", cwd: "/proj", addDirs: ["/x"] });
+  it("resume rejects create-only inputs loudly (exec resume rejects -C/--add-dir/-p)", () => {
+    expect(() =>
+      buildCodexArgs({ resumeThreadId: "thr_123", cwd: "/proj", addDirs: ["/x"] }),
+    ).toThrow(/create-only inputs/);
+    // Without create-only inputs the resume branch carries none of the flags.
+    const args = buildCodexArgs({ resumeThreadId: "thr_123", sandboxMode: "read-only" });
     expect(args).not.toContain("-C");
+    expect(args).not.toContain("--add-dir");
+    expect(args).not.toContain("-p");
   });
 
   it("serviceTier maps to quoted -c on both branches, default omits", () => {
@@ -172,6 +247,21 @@ describe("codex buildArgs", () => {
     expect(buildCodexArgs({ serviceTier: "default", sandboxMode: "read-only" })).not.toContain(
       "service_tier",
     );
+  });
+
+  it("serviceTier rejects TOML-breakout chars (no config-line rewrite)", () => {
+    for (const evil of ['a"b', "a\\b", "a\nb", "a\rb"]) {
+      expect(() => buildCodexArgs({ serviceTier: evil, sandboxMode: "read-only" })).toThrow(
+        /invalid serviceTier/,
+      );
+      expect(() =>
+        buildCodexArgs({
+          serviceTier: evil,
+          resumeThreadId: "thr_123",
+          sandboxMode: "read-only",
+        }),
+      ).toThrow(/invalid serviceTier/);
+    }
   });
 
   it("disablePlugins adds --disable plugins via option or env", () => {
@@ -266,6 +356,27 @@ describe("CodexParser fixtures", () => {
     const started = `{"type":"item.started","item":{"id":"item_2","type":"reasoning"}}\n`;
     const empty = `{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":""}}\n`;
     expect([...p.parse(enc(started)), ...p.parse(enc(empty)), ...p.flush()]).toEqual([]);
+  });
+
+  it("item error envelopes are dropped (stream warnings, no tool call)", () => {
+    // Verified live on 0.156.1: "ignoring unrecognized configuration
+    // setting" arrives as item.completed/error. A tool_finished would fake
+    // a pairing (no start exists); an error event would false-alarm a
+    // healthy turn — same lines stay on stderr.
+    const p = new CodexParser();
+    const line = `{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Codex is ignoring 1 unrecognized configuration setting."}}\n`;
+    expect([...p.parse(enc(line)), ...p.flush()]).toEqual([]);
+  });
+
+  it("nonzero command exit marks tool_finished error", () => {
+    const p = new CodexParser();
+    const ok = `{"type":"item.completed","item":{"id":"c1","type":"command_execution","exit_code":0}}\n`;
+    const bad = `{"type":"item.completed","item":{"id":"c2","type":"command_execution","exit_code":1}}\n`;
+    const evs = [...p.parse(enc(ok + bad)), ...p.flush()];
+    expect(evs.filter((e) => e.type === "tool_finished")).toMatchObject([
+      { id: "c1", error: false },
+      { id: "c2", error: true },
+    ]);
   });
 
   it("agent_message surfaces text_delta once, without duplicate tool_finished", () => {

@@ -17,6 +17,15 @@ const base: RuntimeCapabilities = {
   reasoning: true,
   images: false,
   workspace: false,
+  agentSelection: false,
+  midRunInput: false,
+  historySeed: false,
+  systemPrompt: false,
+  maxTokens: false,
+  costBudget: false,
+  structuredOutput: false,
+  toolAllowlist: false,
+  profileSelection: false,
 };
 
 describe("normalizeWorkspaceAllowedPaths", () => {
@@ -64,9 +73,13 @@ describe("buildArgs workspace mapping", () => {
     expect(buildClaudeArgs({})).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("codex addDirs → -C, sandboxMode → --sandbox (new) and -c on resume", () => {
+  it("codex addDirs → --add-dir, sandboxMode → --sandbox (new) and -c on resume", () => {
     expect(buildCodexArgs({ addDirs: ["/a"], sandboxMode: "workspace-write" })).toEqual(
-      expect.arrayContaining(["-C", "/a", "--sandbox", "workspace-write"]),
+      expect.arrayContaining(["--add-dir", "/a", "--sandbox", "workspace-write"]),
+    );
+    // cwd still pins via -C; only extra roots moved to --add-dir.
+    expect(buildCodexArgs({ cwd: "/w", addDirs: ["/a"] })).toEqual(
+      expect.arrayContaining(["-C", "/w", "--add-dir", "/a"]),
     );
     expect(buildCodexArgs({ resumeThreadId: "thr_1", sandboxMode: "workspace-write" })).toEqual(
       expect.arrayContaining(["-c", 'sandbox_mode="workspace-write"', "thr_1"]),
@@ -74,6 +87,30 @@ describe("buildArgs workspace mapping", () => {
     expect(
       buildCodexArgs({ resumeThreadId: "thr_1", sandboxMode: "workspace-write" }),
     ).not.toContain("--sandbox");
+  });
+
+  it("codex resume rejects create-only inputs (cwd/addDirs/profile)", () => {
+    expect(() => buildCodexArgs({ resumeThreadId: "thr_1", cwd: "/w" })).toThrow(
+      /create-only inputs/,
+    );
+    expect(() => buildCodexArgs({ resumeThreadId: "thr_1", addDirs: ["/a"] })).toThrow(
+      /create-only inputs/,
+    );
+    expect(() => buildCodexArgs({ resumeThreadId: "thr_1", profile: "fast" })).toThrow(
+      /create-only inputs/,
+    );
+  });
+
+  it("codex profile → -p on create, dangerouslySkipPermissions → bypass flag", () => {
+    expect(buildCodexArgs({ profile: "fast" })).toEqual(expect.arrayContaining(["-p", "fast"]));
+    expect(buildCodexArgs({ dangerouslySkipPermissions: true })).toContain(
+      "--dangerously-bypass-approvals-and-sandbox",
+    );
+    expect(buildCodexArgs({ resumeThreadId: "thr_1", dangerouslySkipPermissions: true })).toContain(
+      "--dangerously-bypass-approvals-and-sandbox",
+    );
+    expect(buildCodexArgs({})).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(() => buildCodexArgs({ profile: "--evil" })).toThrow(/invalid profile id/);
   });
 });
 

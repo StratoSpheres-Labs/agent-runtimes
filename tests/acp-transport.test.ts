@@ -51,6 +51,38 @@ describe("AcpTransport", () => {
     }
   }, 15000);
 
+  it("a circular handler result is answered -32603 (not a stringify leak)", async () => {
+    // C2 (downgraded on verification: no crash — the throw lands in the
+    // adjacent catch and goes out as -32600 with a "circular structure"
+    // message; the guard answers the correct -32603 instead). The mock
+    // echoes our answer inside its PERM-ANSWER update, which is observed
+    // here — pre-fix this sees -32600, post-fix -32603.
+    const t = new AcpTransport(mockArgs("permission"));
+    const seen: string[] = [];
+    t.onMessage((msg) => {
+      const params = (msg.params ?? {}) as Record<string, unknown>;
+      const update = params["update"] as Record<string, unknown> | undefined;
+      const content = update?.["content"] as Record<string, unknown> | undefined;
+      if (typeof content?.["text"] === "string") seen.push(content["text"]);
+    });
+    try {
+      await t.start();
+      const circular: Record<string, unknown> = {};
+      circular["self"] = circular;
+      // eslint-disable-next-line @typescript-eslint/require-await -- returns a plain value by design: the transport awaits it
+      t.setAgentRequestHandler(async () => circular);
+      const res = await t.request<{ stopReason: string }>(
+        "session/prompt",
+        {},
+        { timeoutMs: 15000 },
+      );
+      expect(res.stopReason).toBe("end_turn");
+      expect(seen.join("\n")).toContain("-32603");
+    } finally {
+      await t.close();
+    }
+  }, 20000);
+
   it("close() is idempotent and rejects afterwards", async () => {
     const t = new AcpTransport(mockArgs("turn"));
     await t.start();

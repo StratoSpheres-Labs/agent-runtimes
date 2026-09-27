@@ -177,6 +177,15 @@ const ALL_CAPS: RuntimeCapabilities = {
   reasoning: true,
   images: true,
   workspace: true,
+  agentSelection: true,
+  midRunInput: true,
+  historySeed: true,
+  systemPrompt: true,
+  maxTokens: true,
+  costBudget: true,
+  structuredOutput: true,
+  toolAllowlist: true,
+  profileSelection: true,
 };
 
 function stubRuntime(): AgentRuntime {

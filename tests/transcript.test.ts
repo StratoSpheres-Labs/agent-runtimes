@@ -17,7 +17,11 @@ import {
   type TranscriptEntry,
 } from "../src/definition/transcript.js";
 import { parseCodexRollout, readCodexTranscript } from "../runtimes/codex/transcript.js";
-import { parseClaudeTranscript, readClaudeTranscript } from "../runtimes/claude/transcript.js";
+import {
+  findClaudeTranscript,
+  parseClaudeTranscript,
+  readClaudeTranscript,
+} from "../runtimes/claude/transcript.js";
 import { readOpencodeTranscript } from "../runtimes/opencode/transcript.js";
 
 describe("transcript helpers", () => {
@@ -121,6 +125,35 @@ describe("parseCodexRollout", () => {
     ]);
   });
 
+  it("reads 0.156.1 content blocks (text/Text, verified live)", () => {
+    // 0.156.1 rollout content blocks use `text` (user) / `Text`
+    // (assistant); without these, history() folds to [] on current CLIs.
+    const lines = [
+      {
+        timestamp: 1789000001000,
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: { type: "UserMessage", id: "m1", content: [{ type: "text", text: "hi" }] },
+        },
+      },
+      {
+        timestamp: 1789000002000,
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: { type: "AgentMessage", id: "m2", content: [{ type: "Text", text: "hello" }] },
+        },
+      },
+    ]
+      .map((o) => JSON.stringify(o))
+      .join("\n");
+    expect(parseCodexRollout(lines)).toEqual([
+      { role: "user", text: "hi", timestamp: 1789000001000 },
+      { role: "assistant", text: "hello", timestamp: 1789000002000 },
+    ]);
+  });
+
   it("readCodexTranscript honors limit through the file path", () => {
     const base = mkdtempSync(join(tmpdir(), "agent-runtimes-cxroll-"));
     try {
@@ -134,6 +167,23 @@ describe("parseCodexRollout", () => {
       expect(readCodexTranscript({ sessionId: "thr_missing", codexHome: base })).toEqual([]);
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findClaudeTranscript", () => {
+  it("returns null for path-shaped session ids (no transcript-root escape)", () => {
+    const home = mkdtempSync(join(tmpdir(), "claude-home-"));
+    try {
+      for (const evil of ["../evil", "..\\evil", "a/b", "", "  "]) {
+        expect(findClaudeTranscript({ sessionId: evil, homeDir: home })).toBeNull();
+      }
+      // A normal uuid simply misses (null) instead of throwing.
+      expect(
+        findClaudeTranscript({ sessionId: "6fd6faeb-a5da-48c2-ab2d-7691045af24b", homeDir: home }),
+      ).toBeNull();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

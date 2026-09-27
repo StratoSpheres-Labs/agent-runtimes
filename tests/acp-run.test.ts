@@ -69,6 +69,41 @@ describe("AcpRun", () => {
     expect(types.filter((t) => t === "done")).toHaveLength(1);
   }, 15000);
 
+  it("marks done when the turn completes (session gate opens)", async () => {
+    // AcpRun._done was never assigned: every second run on an ACP session
+    // threw "already has an active run". Regression test.
+    const run = new AcpRun("test:donegate", {
+      transport: mockTransport("turn"),
+      cwd: process.cwd(),
+    });
+    await run.start("hi");
+    expect(run.done).toBe(false);
+    for await (const e of run.events()) {
+      if (e.type === "done") break;
+    }
+    expect(run.done).toBe(true);
+    await run.close();
+  }, 15000);
+
+  it("a rejected start reaps the child (no zombie)", async () => {
+    // Regression: the handshake failed AFTER spawn and nobody closed the
+    // transport — the long-lived agent process survived as an orphan.
+    // start() now closes before throwing.
+    const transport = mockTransport("refuse-new");
+    const run = new AcpRun("test:refuse", { transport, cwd: process.cwd() });
+    await expect(run.start("hi")).rejects.toThrow();
+    // start() closes before throwing: the child handle is reaped and the
+    // transport reports stopped. Without the fix the mock (stdin open,
+    // never exits by itself) stays alive with state "running" — a zombie.
+    expect(transport.state).toBe("stopped");
+    const pid = transport.pid;
+    if (pid !== undefined) {
+      // A still-tracked handle must already be dead, never alive.
+      expect(() => process.kill(pid, 0)).toThrow();
+    }
+    await run.close(); // idempotent after failed start
+  }, 15000);
+
   it("emits session_started with the native id", async () => {
     const run = new AcpRun("test:sid", { transport: mockTransport("turn"), cwd: process.cwd() });
     try {

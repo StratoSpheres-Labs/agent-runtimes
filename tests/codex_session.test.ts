@@ -39,4 +39,40 @@ describe("CodexSession resume", () => {
     await sess.close();
     await sess.close(); // idempotent
   });
+
+  it("rejects a flag-shaped resumeSessionId at construction", async () => {
+    expect(
+      () =>
+        new CodexSession({
+          id: "evil",
+          command: process.execPath,
+          cwd,
+          resumeSessionId: "exec resume --json",
+        }),
+    ).toThrow(/resumeSessionId/);
+    const ok = new CodexSession({
+      id: "ok",
+      command: process.execPath,
+      cwd,
+      resumeSessionId: "01a0e0d7-5410-73c3-9abe-04fd10c7efc4",
+    });
+    expect(ok.nativeSessionId).toBe("01a0e0d7-5410-73c3-9abe-04fd10c7efc4");
+    await ok.close();
+  });
+
+  it("refuses a new run while the previous run was never drained (no silent fresh thread)", async () => {
+    const sess = new CodexSession({
+      id: "w1",
+      command: "agent-runtimes-missing-xyz",
+      cwd,
+    });
+    const run1 = await sess.run("x");
+    await expect(sess.run("y")).rejects.toThrow(/not drained to done/);
+    for await (const e of run1.events()) {
+      if (e.type === "done") break;
+    }
+    const run3 = await sess.run("z");
+    expect(run3.done).toBe(false);
+    await sess.close();
+  });
 });

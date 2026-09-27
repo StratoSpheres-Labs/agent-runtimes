@@ -2,7 +2,12 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { imageToBase64, stageImageToTempFile, stagedIsTemp } from "../src/definition/image.js";
+import {
+  MAX_IMAGE_BYTES,
+  imageToBase64,
+  stageImageToTempFile,
+  stagedIsTemp,
+} from "../src/definition/image.js";
 import { buildClaudeStdinPrompt } from "../runtimes/claude/definition.js";
 import { ClaudeSession } from "../runtimes/claude/session.js";
 import { CodexSession } from "../runtimes/codex/session.js";
@@ -50,6 +55,57 @@ describe("image helpers", () => {
       expect(stagedIsTemp(staged, cwd)).toBe(true);
     } finally {
       if (staged) rmSync(staged, { force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("stageImageToTempFile rejects escaping filenames (no tmpdir breakout)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "img-evil-"));
+    try {
+      expect(() =>
+        stageImageToTempFile(
+          {
+            data: Buffer.from(tinyPngBase64, "base64"),
+            mimeType: "image/png",
+            filename: "../../evil.png",
+          },
+          cwd,
+        ),
+      ).toThrow(/escapes the staging dir/);
+      expect(() =>
+        stageImageToTempFile(
+          {
+            data: Buffer.from(tinyPngBase64, "base64"),
+            mimeType: "image/png",
+            filename: "..\\evil.png",
+          },
+          cwd,
+        ),
+      ).toThrow(/escapes the staging dir/);
+      // A plain hostile-but-contained name still stages inside tmpdir.
+      const staged = stageImageToTempFile(
+        { data: Buffer.from(tinyPngBase64, "base64"), mimeType: "image/png", filename: "evil.png" },
+        cwd,
+      );
+      expect(existsSync(staged)).toBe(true);
+      rmSync(staged, { force: true });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("image inputs respect the byte cap (no unbounded reads)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "img-cap-"));
+    try {
+      const big = Buffer.alloc(MAX_IMAGE_BYTES + 1, 7);
+      expect(() => stageImageToTempFile({ data: big, mimeType: "image/png" }, cwd)).toThrow(
+        /too large/,
+      );
+      const bigFile = join(cwd, "big.bin");
+      writeFileSync(bigFile, big);
+      expect(() => imageToBase64({ path: bigFile }, cwd)).toThrow(/too large/);
+      rmSync(bigFile, { force: true });
+    } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });

@@ -38,7 +38,7 @@ describe("integration: opencode-acp", () => {
     const cwd = mkdtempSync(join(tmpdir(), "agent-runtimes-acp-"));
     try {
       const runtime = await runtimes.resolve("opencode-acp");
-      const session = await runtime.createSession({ cwd, model: "opencode/mimo-v2.5-free" });
+      const session = await runtime.createSession({ cwd, model: "opencode/mimo-v2.6-flash-free" });
       const run = await session.run("reply with exactly: OK", { timeout: 90000 });
       const types: string[] = [];
       let text = "";
