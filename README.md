@@ -1,5 +1,7 @@
 # agent-runtimes
 
+![agent-runtimes](./docs/for_README/agent_runtimes_hero_img.png)
+
 [English](./README.md) | [中文](./README.zh-CN.md)
 
 [![CI](https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml/badge.svg)](https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml)

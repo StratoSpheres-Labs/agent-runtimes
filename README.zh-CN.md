@@ -1,5 +1,7 @@
 # agent-runtimes
 
+![agent-runtimes](./docs/for_README/agent_runtimes_hero_img_ZH.png)
+
 [English](./README.md) | 中文
 
 [![npm](https://img.shields.io/npm/v/@stratosphereslab/agent-runtimes)](https://www.npmjs.com/package/@stratosphereslab/agent-runtimes)
