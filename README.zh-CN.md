@@ -2,6 +2,8 @@
 
 [English](./README.md) | 中文
 
+[![npm](https://img.shields.io/npm/v/@stratosphereslab/agent-runtimes)](https://www.npmjs.com/package/@stratosphereslab/agent-runtimes)
+
 `agent-runtimes` 是一个 Node.js/TypeScript 兼容层，通过统一的 `Runtime → Session → Run → RuntimeEvent` API，把本地 Agent CLI 的发现、启动、控制与观测方式统一起来。
 
 > [!WARNING]  
