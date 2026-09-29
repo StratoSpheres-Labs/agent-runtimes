@@ -42,6 +42,8 @@ export class OpencodeSession implements AgentSession {
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly stagedImages: string[] = [];
   private readonly resumeGuard = new NativeIdResumeGuard();
+  /** Raw detected CLI version — selects the 1.x vs 2.x flag set per run. */
+  private readonly cliVersion: string | undefined;
 
   public constructor(options: {
     id: string;
@@ -53,6 +55,7 @@ export class OpencodeSession implements AgentSession {
     mcpServers?: McpServer[];
     workspace?: WorkspaceOptions;
     resumeSessionId?: string;
+    cliVersion?: string;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -62,6 +65,7 @@ export class OpencodeSession implements AgentSession {
     this.agent = options.agent;
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
+    this.cliVersion = options.cliVersion;
     this.opencodeSessionId = sanitizeResumeId(options.resumeSessionId, "opencode") ?? null;
     this.inner = new DefaultSession({
       id: options.id,
@@ -103,8 +107,16 @@ export class OpencodeSession implements AgentSession {
           agent: this.agent,
           format: "json",
           dir,
+          cliVersion: this.cliVersion,
         })
-      : buildOpencodeArgs({ model, reasoning, agent: this.agent, format: "json", dir });
+      : buildOpencodeArgs({
+          model,
+          reasoning,
+          agent: this.agent,
+          format: "json",
+          dir,
+          cliVersion: this.cliVersion,
+        });
     const allImages = [...partImages, ...(runOpts.images ?? [])];
     const imageFiles = allImages.map((img) => {
       const file = stageImageToTempFile(img, this.cwd);

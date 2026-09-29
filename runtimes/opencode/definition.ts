@@ -3,6 +3,7 @@ import type { ReasoningOptions } from "../../src/definition/reasoning.js";
 import type { McpServer } from "../../src/definition/mcp.js";
 import type { RuntimeModel, ModelReasoningOption } from "../../src/definition/model.js";
 import { sanitizeModelId } from "../../src/definition/model.js";
+import { parseSemver } from "../../src/discovery/version.js";
 import { RuntimeSessionError } from "../../src/core/errors.js";
 
 /**
@@ -70,7 +71,7 @@ export const opencodeDefinition: RuntimeDefinition = {
   // across 1.18.x — only list what live runs actually saw. Extend when a
   // real incompatibility is observed, not sooner.
   versionPolicy: {
-    tested: ["1.18.27", "1.18.30", "1.18.31", "1.18.32"],
+    tested: ["1.18.27", "1.18.30", "1.18.31", "1.18.32", "2.0.18"],
   },
   models: {
     fallbackModels: [
@@ -93,6 +94,13 @@ export type OpencodeBuildArgsOptions = {
   agent?: string;
   /** Unified reasoning knob (Phase 17) — maps to `--variant`. */
   reasoning?: ReasoningOptions;
+  /**
+   * Raw detected CLI version (`detect().version`, e.g. `"1.18.32"` or
+   * `"opencode v2.0.18"`). Selects the flag set: 2.x removed `--dir` and
+   * `--variant` (the latter inlines as `--model provider/model#variant`).
+   * Absent/unparseable fails open to the 1.x set (current behavior).
+   */
+  cliVersion?: string;
   /** Extra args for `opencode run --format` — default "json" */
   format?: "json" | "default";
   /** Workspace dir — mirrors daemon's appendOpenCodeWorkspaceDir (`--dir`). */
@@ -106,16 +114,30 @@ export type OpencodeBuildArgsOptions = {
 };
 
 /**
+ * True when the detected CLI is opencode 2.x (`major >= 2`). Unparseable
+ * versions fail open to false (the 1.x flag set — today's behavior).
+ * Pure and unit-tested; keeps the version knowledge inside the adapter
+ * (Rule 7 — core never branches on versions).
+ */
+export function isOpencodeV2(cliVersion: string | undefined): boolean {
+  if (!cliVersion) return false;
+  const parsed = parseSemver(cliVersion);
+  return parsed !== null && parsed.major >= 2;
+}
+
+/**
  * Task 9.2 — hide CLI flags behind buildArgs() (Rule 2).
  * Caller never sees --resume/-s/--model/--variant.
  */
 export function buildOpencodeArgs(options: OpencodeBuildArgsOptions = {}): string[] {
   const format = options.format ?? "json";
+  const v2 = isOpencodeV2(options.cliVersion);
   const args: string[] = ["run", "--format", format];
   // Thinking blocks only stream in JSON mode and only with `--thinking`
   // (verified live on 1.18.31); without it the parser's `reasoning` branch
   // would never fire. Display-only flag — model behavior untouched.
   if (format === "json") args.push("--thinking");
+  let modelValue: string | undefined;
   if (options.model !== undefined) {
     // Model ids ride argv (`--model <id>`) — reject flag-shaped ids before
     // the CLI can parse them as options. `default` means "CLI config" and
@@ -126,27 +148,57 @@ export function buildOpencodeArgs(options: OpencodeBuildArgsOptions = {}): strin
         runtime: "opencode",
       });
     }
-    if (model !== "default") args.push("--model", model);
+    if (model !== "default") modelValue = model;
+  }
+  // Explicit `variant` wins over the unified knob.
+  // Gated: only a variant the model actually advertises is sent (see
+  // supportsOpencodeVariant) — unknown pairs omit the flag and run the base
+  // model instead of failing the turn on an invalid value. On 2.x the gate
+  // doubles as the inline guard below. Computed before any push so the
+  // 1.x argv order stays byte-identical.
+  const requested = options.variant ?? options.reasoning?.effort;
+  let variant: string | undefined;
+  if (requested !== undefined) {
+    const clean = sanitizeOpencodeVariant(requested, "opencode");
+    if (supportsOpencodeVariant(options.model, clean, options.knownModels)) {
+      variant = clean;
+    }
+  }
+  if (modelValue !== undefined) {
+    // 2.x removed `--variant`: the variant inlines as
+    // `--model provider/model#variant` (verified in `run --help`).
+    // Both halves are already sanitized; `#` is our own joiner, so the
+    // composed value bypasses re-sanitization (which rejects `#`).
+    // Without a model a variant has no address — omit and run the base
+    // model, mirroring the gate above. Inline only on affirmative catalog
+    // evidence (strict gate): a never-fetched catalog omits — the legacy
+    // fail-open emit would hard-fail the turn (`Variant unavailable`,
+    // verified live on 2.0.18). 1.x keeps the plain model id.
+    let modelArg = modelValue;
+    if (
+      v2 &&
+      variant !== undefined &&
+      variantInlineAdvertised(options.model, variant, options.knownModels)
+    ) {
+      modelArg = `${modelValue}#${variant}`;
+    }
+    args.push("--model", modelArg);
   }
   if (options.sessionId) {
     args.push("--session", options.sessionId);
   }
-  // Explicit `variant` wins over the unified knob; exactly one --variant is emitted.
-  // Gated: only a variant the model actually advertises is sent (see
-  // supportsOpencodeVariant) — unknown pairs omit the flag and run the base
-  // model instead of failing the turn on an invalid value.
-  const requested = options.variant ?? options.reasoning?.effort;
-  if (requested !== undefined) {
-    const variant = sanitizeOpencodeVariant(requested, "opencode");
-    if (supportsOpencodeVariant(options.model, variant, options.knownModels)) {
-      args.push("--variant", variant);
-    }
+  if (!v2) {
+    // 1.x only: `--variant` is a real flag there. Unknown pairs already
+    // omitted by the gate above.
+    if (variant !== undefined) args.push("--variant", variant);
   }
   if (options.agent !== undefined) {
     const agent = sanitizeOpencodeAgent(options.agent, "opencode");
     if (agent !== undefined) args.push("--agent", agent);
   }
-  if (options.dir) {
+  // 2.x removed `--dir` (`Unrecognized flag`, verified live): the process
+  // cwd (passed as spawn `cwd`) is the only workspace pin now.
+  if (options.dir && !v2) {
     args.push("--dir", options.dir);
   }
   return args;
@@ -276,6 +328,29 @@ let rememberedOpencodeModels: RuntimeModel[] | null = null;
 /** Prime the `--variant` gating cache (called by `models()`; null = never fetched). */
 export function rememberOpencodeModels(models: RuntimeModel[]): void {
   rememberedOpencodeModels = models;
+}
+
+/**
+ * Whether a variant may be inlined as `--model id#variant` on 2.x.
+ * Stricter than the legacy gate by design: an inline `#variant` the model
+ * lacks hard-fails the turn (verified live: `Variant unavailable`), so
+ * absence of evidence (null catalog, unknown model, no advertised
+ * variants) omits — the turn runs the base model instead of dying.
+ * 1.x keeps legacy emit (pinned by existing tests; legacy CLI).
+ */
+function variantInlineAdvertised(
+  modelId: string | undefined,
+  variant: string | undefined,
+  known?: RuntimeModel[] | null,
+): boolean {
+  // Absent catalog falls back to the module cache (same seam as the legacy
+  // gate); a never-fetched cache still omits — see doc comment above.
+  const list = known ?? rememberedOpencodeModels;
+  if (!modelId || !variant || list === null) return false;
+  const live = list.find((m) => m.id === modelId);
+  if (!live) return false;
+  const options = live.reasoningOptions ?? [];
+  return options.some((o) => o.id === variant);
 }
 
 /**

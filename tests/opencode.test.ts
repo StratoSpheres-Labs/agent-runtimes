@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { buildOpencodeArgs, opencodeDefinition } from "../runtimes/opencode/definition.js";
+import {
+  buildOpencodeArgs,
+  isOpencodeV2,
+  opencodeDefinition,
+} from "../runtimes/opencode/definition.js";
 import { OpencodeParser } from "../runtimes/opencode/parser.js";
 
 function enc(s: string): Uint8Array {
@@ -59,6 +63,78 @@ describe("opencode buildArgs", () => {
       "--thinking",
       "--variant",
       "max",
+    ]);
+  });
+
+  it("isOpencodeV2 branches on major version, fails open on garbage", () => {
+    expect(isOpencodeV2(undefined)).toBe(false);
+    expect(isOpencodeV2("")).toBe(false);
+    expect(isOpencodeV2("not-a-version")).toBe(false);
+    expect(isOpencodeV2("1.18.32")).toBe(false);
+    expect(isOpencodeV2("opencode v2.0.18")).toBe(true);
+    expect(isOpencodeV2("2.0.18")).toBe(true);
+  });
+
+  it("v2 drops --dir (Unrecognized flag, verified live 2.0.18)", () => {
+    expect(buildOpencodeArgs({ dir: "D:\\proj", cliVersion: "opencode v2.0.18" })).toEqual([
+      "run",
+      "--format",
+      "json",
+      "--thinking",
+    ]);
+    // 1.x keeps it (byte-identical legacy).
+    expect(buildOpencodeArgs({ dir: "D:\\proj", cliVersion: "1.18.32" })).toContain("--dir");
+    expect(buildOpencodeArgs({ dir: "D:\\proj" })).toContain("--dir");
+  });
+
+  it("v2 inlines variant as --model id#variant, never --variant", () => {
+    // Explicit knownModels keeps the gate deterministic regardless of the
+    // module cache state left by other test files.
+    const known = [{ id: "opencode/mimo-v2.6-flash-free", reasoningOptions: [{ id: "high" }] }];
+    expect(
+      buildOpencodeArgs({
+        model: "opencode/mimo-v2.6-flash-free",
+        variant: "high",
+        knownModels: known,
+        cliVersion: "2.0.18",
+      }),
+    ).toEqual([
+      "run",
+      "--format",
+      "json",
+      "--thinking",
+      "--model",
+      "opencode/mimo-v2.6-flash-free#high",
+    ]);
+  });
+
+  it("v2 omits a variant with no model (nothing to inline into)", () => {
+    expect(buildOpencodeArgs({ variant: "high", cliVersion: "2.0.18" })).toEqual([
+      "run",
+      "--format",
+      "json",
+      "--thinking",
+    ]);
+  });
+
+  it("v2 omits variant without catalog evidence (strict gate, live 2.0.18)", () => {
+    // A never-fetched catalog must not legacy-emit: `#low` for a model
+    // without it hard-fails the turn (`Variant unavailable`, verified
+    // live) — omit and run the base model instead.
+    expect(
+      buildOpencodeArgs({
+        model: "opencode/mimo-v2.6-flash-free",
+        variant: "low",
+        knownModels: [],
+        cliVersion: "2.0.18",
+      }),
+    ).toEqual([
+      "run",
+      "--format",
+      "json",
+      "--thinking",
+      "--model",
+      "opencode/mimo-v2.6-flash-free",
     ]);
   });
 

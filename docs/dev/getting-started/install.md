@@ -32,9 +32,9 @@ node dist/cli.js doctor codex
 A healthy row looks like:
 
 ```
-Executable   ✓  C:\...\npm\node_modules\opencode-ai\bin\opencode.exe
-Version      ✓  1.18.32
-Installs     ✓  npm 1.18.32 (selected)
+Executable   ✓  C:\...\npm\node_modules\@opencode\cli\bin\opencode.exe
+Version      ✓  2.0.18
+Installs     ✓  npm 2.0.18 (selected)
 ```
 
 ## Installing the CLIs themselves

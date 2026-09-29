@@ -86,7 +86,7 @@ Four suites required (`Dev_Docs/agent_runtimes_dev_plan.md:1619-1695`):
 - License: `Apache-2.0` (not MIT) — see `LICENSE` (Apache 2.0, full text).
 - Git: `main` NOT protected until first release; direct commits to `main` allowed before v1.0.0. Commits still follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, etc.). Switch to protected + `feat/*` → PR after release.
 - Lint: `ESLint` flat config + `typescript-eslint` strict + `Prettier` strict (fail on warning before merge).
-- Local CLIs verified on this machine: `opencode 1.18.32`, `claude 2.1.283`, `codex 0.157.1`. Use `opencode run --format json --thinking --model <provider/model> --session <id>` for adapter/integration tests (`--thinking` is passed by default so `reasoning` parts stream).
+- Local CLIs verified on this machine: `opencode 2.0.18`, `claude 2.1.283`, `codex 0.157.1`. Use `opencode run --format json --thinking --model <provider/model> --session <id>` for adapter/integration tests (`--thinking` is passed by default so `reasoning` parts stream).
 
 ## 11. How to Work in This Repo (for OpenCode)
 

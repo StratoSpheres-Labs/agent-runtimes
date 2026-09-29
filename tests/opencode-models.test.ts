@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildOpencodeArgs,
+  isOpencodeV2,
   mergeOpencodeModelLists,
   parseOpenCodeModels,
   supportsOpencodeVariant,
@@ -152,6 +153,10 @@ describe("OpencodeRuntime.models() (live)", () => {
       expect(m.id).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*\//);
     }
     // Verbose path worked: at least one model advertises variants.
+    // 2.x removed `models --verbose` (verified live 2.0.18), so the live
+    // catalog carries no variant metadata there — the plain-catalog
+    // assertions above are the whole contract on 2.x.
+    if (isOpencodeV2(status.version ?? undefined)) return;
     const withVariants = models.find((m) => (m.reasoningOptions ?? []).length > 0);
     expect(withVariants).toBeDefined();
     if (withVariants) {

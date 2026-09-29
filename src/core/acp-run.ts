@@ -48,8 +48,10 @@ const CANCEL_RPC_TIMEOUT_MS = 5_000;
  * Owns the full dialog for one prompt: transport start, initialize,
  * session/new (or session/load on resume), optional set_model, prompt,
  * then completion off the prompt response. Mirrors DefaultRun's completion semantics:
- * clean end resolves, failures surface as error events + done while
- * result() rejects with the typed error.
+ * clean end resolves, turn failures surface as error events + done while
+ * result() still resolves (non-zero exit shape) — a drain-only consumer
+ * never dies from an unhandled rejection. Only setup failures (a rejected
+ * start()) throw.
  */
 export class AcpRun implements AgentRun {
   public readonly id: string;
@@ -67,7 +69,6 @@ export class AcpRun implements AgentRun {
   private finished = false;
   private unsubscribe: (() => void) | null = null;
   private completionResolve: ((e: ProcessExit) => void) | null = null;
-  private completionReject: ((e: Error) => void) | null = null;
   private readonly completion: Promise<ProcessExit>;
   private _done = false;
 
@@ -83,9 +84,8 @@ export class AcpRun implements AgentRun {
     this.images = options.images;
     this.onPermissionRequest = options.onPermissionRequest;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
-    this.completion = new Promise<ProcessExit>((resolve, reject) => {
+    this.completion = new Promise<ProcessExit>((resolve) => {
       this.completionResolve = resolve;
-      this.completionReject = reject;
     });
   }
 
@@ -187,7 +187,7 @@ export class AcpRun implements AgentRun {
     this.sessionId = sessionId;
     this.push({ type: "session_started", sessionId });
     if (this.model !== undefined) {
-      await this.transport.request("session/set_model", { sessionId, modelId: this.model });
+      await this.setModel(sessionId, this.model);
     }
     this.unsubscribe = this.transport.onMessage((msg) => {
       if (this.finished) return;
@@ -212,6 +212,28 @@ export class AcpRun implements AgentRun {
           this.finishTurnError(err);
         },
       );
+  }
+
+  /**
+   * Select the turn model. `session/set_model` is the 1.x channel; 2.x
+   * removed it (-32601) in favor of the session-config mechanism
+   * (`session/set_config_option {configId: "model", value}`, verified live
+   * on 2.0.18: the response echoes the new `currentValue`). Only a
+   * method-not-found falls through — any other failure (bad id, transport
+   * death) throws loudly, never silently runs the default model.
+   */
+  private async setModel(sessionId: string, model: string): Promise<void> {
+    try {
+      await this.transport.request("session/set_model", { sessionId, modelId: model });
+      return;
+    } catch (err) {
+      if (!isMethodNotFound(err)) throw err;
+    }
+    await this.transport.request("session/set_config_option", {
+      sessionId,
+      configId: "model",
+      value: model,
+    });
   }
 
   /**
@@ -351,8 +373,22 @@ export class AcpRun implements AgentRun {
     this.push({ type: "done" });
     this.stream.close();
     this.unsubscribe?.();
-    this.completionReject?.(e);
+    // Resolve (non-zero exit shape), never reject: the typed failure is
+    // already on the stream as an error event + done. Rejecting here would
+    // kill drain-only consumers with an unhandled rejection — the exact
+    // asymmetry with DefaultRun this alignment removes.
+    this.completionResolve?.({ code: 1, signal: null });
   }
+}
+
+/**
+ * True when a request failed because the server has no such method
+ * (JSON-RPC -32601). The transport surfaces it as
+ * `RuntimeProtocolError("ACP error -32601: ...")` — match on the code
+ * prefix, never on the human message that follows it.
+ */
+function isMethodNotFound(err: unknown): boolean {
+  return err instanceof RuntimeProtocolError && err.message.includes("ACP error -32601");
 }
 
 function toPermissionRequest(method: string, params: unknown): PermissionRequest {

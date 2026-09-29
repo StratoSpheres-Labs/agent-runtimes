@@ -58,6 +58,31 @@ describe("parseOpencodeAuthList", () => {
       detail: "no opencode credentials — run `opencode auth login`",
     });
   });
+
+  it("parses the 2.x table shape (verified live 2.0.18)", () => {
+    expect(
+      parseOpencodeAuthList(
+        "DeepSeek          API key                     stored\n" +
+          "Nvidia            API key                     stored\n" +
+          "OpenCode Console  API key                     stored\n",
+      ),
+    ).toEqual({
+      authenticated: true,
+      method: "api-key",
+      identities: ["DeepSeek", "Nvidia", "OpenCode Console"],
+      detail: "3 opencode credential(s): DeepSeek, Nvidia, OpenCode Console",
+    });
+  });
+
+  it("ignores non-table lines around the 2.x shape", () => {
+    expect(parseOpencodeAuthList("No credentials configured\n")).toEqual({
+      authenticated: false,
+      method: "none",
+      detail: "no opencode credentials — run `opencode auth login`",
+    });
+    // Single-space separators are not the verified table shape — stays out.
+    expect(parseOpencodeAuthList("DeepSeek API key stored\n").authenticated).toBe(false);
+  });
 });
 
 describe("probeOpencodeAuth (hermetic)", () => {

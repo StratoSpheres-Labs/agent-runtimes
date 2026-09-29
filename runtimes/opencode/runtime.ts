@@ -44,10 +44,13 @@ import { withStderrTail } from "../../src/definition/auth.js";
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 /**
- * Parse `opencode auth list` (verified on 1.18.27): a credential tree with
- * `●  <name> <kind>` lines plus a `<n> credentials` footer. No JSON flag
- * exists, so parse defensively — any shape change degrades to unknown,
- * never to a false logged-out.
+ * Parse `opencode auth list`. Two shapes, both verified live:
+ * - 1.x (verified on 1.18.27): a credential tree with `●  <name> <kind>`
+ *   lines plus a `<n> credentials` footer.
+ * - 2.x (verified on 2.0.18): a plain table, one credential per line —
+ *   `<name>  <API key|OAuth>  stored` (multi-word names allowed).
+ * No JSON flag exists, so parse defensively — any shape change degrades to
+ * unknown, never to a false logged-out.
  */
 export function parseOpencodeAuthList(stdout: string): AuthStatus {
   const text = stdout.replace(ANSI_ESCAPE, "");
@@ -56,14 +59,29 @@ export function parseOpencodeAuthList(stdout: string): AuthStatus {
   let sawApiKey = false;
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
-    if (!line.startsWith("●")) continue;
-    const rest = line.slice(1).trim().split(/\s+/);
-    const kind = rest.pop() ?? "";
-    const name = rest.join(" ");
+    // Credential kind words seen so far (`API key`, `OAuth`, ...).
+    let kind = "";
+    let name = "";
+    if (line.startsWith("●")) {
+      const rest = line.slice(1).trim().split(/\s+/);
+      kind = rest.pop() ?? "";
+      name = rest.join(" ");
+    } else {
+      // 2.x table row: "<name>  <API key|OAuth>  stored" (verified live
+      // on 2.0.18). The kind alternation + trailing `stored` anchor the
+      // match so headers, separators, and prose lines never qualify.
+      const row = /^(.*?)\s{2,}((?:api|oauth)(?:\s+key)?)\s+stored\s*$/i.exec(line);
+      if (!row) continue;
+      const rawName = row[1];
+      const rawKind = row[2];
+      if (rawName === undefined || rawKind === undefined) continue;
+      name = rawName.trim();
+      kind = rawKind;
+    }
     if (!name) continue;
     identities.push(name);
     if (/oauth/i.test(kind)) sawOauth = true;
-    else if (/api/i.test(kind)) sawApiKey = true;
+    else if (/api|key/i.test(kind)) sawApiKey = true;
   }
   const countMatch = /(\d+)\s+credentials?/i.exec(text);
   const count = countMatch?.[1] === undefined ? identities.length : Number(countMatch[1]);
@@ -289,6 +307,8 @@ export class OpencodeRuntime extends DefaultRuntime {
       mcpServers,
       workspace,
       resumeSessionId,
+      // Selects the 1.x vs 2.x flag set per run (undefined = legacy 1.x).
+      cliVersion: status.installed ? (status.version ?? undefined) : undefined,
     });
   }
 

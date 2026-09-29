@@ -34,7 +34,7 @@ This is the contributor entry point. It covers how to set up, build, test, debug
 - **pnpm >= 10** (`corepack enable && corepack prepare pnpm@10 --activate`). The repo is `type: module` and uses `pnpm-workspace.yaml`.
 - **Agent CLIs** (optional, but needed for integration/live tests):
   ```bash
-  opencode --version   # 1.18.32 via npm (.../npm/node_modules/opencode-ai/bin/opencode.exe)
+  opencode --version   # 2.0.18 via npm (.../npm/node_modules/@opencode/cli/bin/opencode.exe; 1.x line was opencode-ai)
   claude --version     # 2.1.283 via npm (.../npm/claude.cmd; ignore any stale pnpm shim)
   codex --version      # 0.157.1 via npm (codex.cmd shim → node vendor)
   # If a CLI is absent, its integration test is skipped — `pnpm test` still passes.

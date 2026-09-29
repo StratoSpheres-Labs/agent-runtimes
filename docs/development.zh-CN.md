@@ -30,7 +30,7 @@
 - **pnpm >= 10**（`corepack enable && corepack prepare pnpm@10 --activate`），仓库为 `type: module` 且含 `pnpm-workspace.yaml`
 - **Agent CLI**（可选，无则集成测试跳过，`pnpm test` 仍绿）：
   ```bash
-  opencode --version   # 本机已验 1.18.32 @ npm .../node_modules/opencode-ai/bin/opencode.exe
+  opencode --version   # 本机已验 2.0.18 @ npm .../node_modules/@opencode/cli/bin/opencode.exe（1.x 包名为 opencode-ai）
   claude --version     # 2.1.283 npm（无视残留的 pnpm shim）
   codex --version      # 0.157.1 npm 的 codex.cmd → node vendor
   # 无 CLI 时集成测试优雅跳过；CI 的 ubuntu+node24 会 npm install -g opencode-ai 真跑

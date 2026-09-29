@@ -41,7 +41,28 @@ jobs:
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+
+      # The suite runs twice at most: fleet preemption (notably
+      # macos-latest during the Tahoe 26 rollout) kills the test step
+      # with zero failing assertions ("The runner has received a
+      # shutdown signal", 2026-09-27/28, repeated). A genuine failure
+      # fails both attempts and stays red — the retry only absorbs
+      # infra kills, it never masks an assertion failure.
+      - name: Run tests (one retry for transient runner death)
+        shell: bash
+        run: |
+          attempt=1
+          max_attempts=2
+          until [ $attempt -gt $max_attempts ]; do
+            echo "--- test attempt $attempt/$max_attempts ---"
+            if pnpm test; then
+              echo "tests passed on attempt $attempt"
+              exit 0
+            fi
+            attempt=$((attempt + 1))
+          done
+          echo "tests failed on all $max_attempts attempts"
+          exit 1
 
       # Integration tests skip gracefully when no Agent CLI is installed.
       # Real-CLI leg: install opencode on ubuntu+node24 to exercise the

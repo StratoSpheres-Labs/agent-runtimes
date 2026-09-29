@@ -48,6 +48,14 @@ async function onRequest(id, method, params) {
     result(id, {});
     return;
   }
+  if (method === "session/set_config_option") {
+    // 2.x model channel (no session/set_model here by design — the mock
+    // speaks the 2.x surface so client fallback is exercised). Echo the
+    // requested value the way the real server echoes currentValue.
+    const p = params ?? {};
+    result(id, { configOptions: [{ id: p.configId, currentValue: p.value }] });
+    return;
+  }
   if (method === "session/prompt") {
     await runTurn(id, params);
     return;

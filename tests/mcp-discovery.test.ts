@@ -29,6 +29,11 @@ describe("parseMcpList", () => {
   it("empty returns []", () => {
     expect(parseMcpList("")).toEqual([]);
   });
+  it("ignores negative sentences instead of minting a ghost server (2.x live)", () => {
+    // `opencode mcp list` on 2.0.18 with nothing configured prints exactly
+    // this (exit 0) — the old line heuristic read a server named "No".
+    expect(parseMcpList("No MCP servers configured\n")).toEqual([]);
+  });
 });
 
 describe("parseCodexMcpList", () => {

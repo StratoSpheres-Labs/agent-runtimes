@@ -59,6 +59,9 @@ export function parseMcpList(stdout: string): McpServerInfo[] | null {
     .filter((l) => l.length > 0);
   const infos: McpServerInfo[] = [];
   for (const rawLine of lines) {
+    // Negative sentences ("No MCP servers configured", 2.x verified live)
+    // are status prose, never a server named "No".
+    if (/^no\b.*\b(configured|found|available)\b/i.test(rawLine.trim())) continue;
     const line = rawLine.replace(/^[^a-zA-Z0-9]+/, "").trim();
     // Skip obvious headers
     if (/^(name|server|mcp|connected|enabled)/i.test(line)) continue;

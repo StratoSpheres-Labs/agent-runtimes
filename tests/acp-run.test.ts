@@ -104,6 +104,47 @@ describe("AcpRun", () => {
     await run.close(); // idempotent after failed start
   }, 15000);
 
+  it("falls back to set_config_option when set_model is missing (2.x live)", async () => {
+    // The mock speaks the 2.x surface (no session/set_model): a run with
+    // an explicit model must still start via session/set_config_option.
+    const run = new AcpRun("test:model2x", {
+      transport: mockTransport("turn"),
+      cwd: process.cwd(),
+      model: "opencode/mimo-v2.6-flash-free",
+    });
+    try {
+      await run.start("hi");
+      const { types, text } = await collect(run);
+      expect(text).toBe("hi there");
+      expect(types).toContain("done");
+    } finally {
+      await run.close();
+    }
+  }, 15000);
+
+  it("failed turns resolve result() (never an unhandled rejection)", async () => {
+    // Alignment with DefaultRun: the typed failure rides the stream as an
+    // error event + done; result() resolves non-zero. A drain-only consumer
+    // that never touches result() must not die.
+    const run = new AcpRun("test:timeout-resolves", {
+      transport: mockTransport("hang"),
+      cwd: process.cwd(),
+      timeoutMs: 300,
+    });
+    await run.start("hi");
+    const codes: string[] = [];
+    const types: string[] = [];
+    for await (const e of run.events()) {
+      types.push(e.type);
+      if (e.type === "error") codes.push(e.error.code);
+      if (e.type === "done") break;
+    }
+    expect(codes).toContain("TIMEOUT");
+    expect(types[types.length - 1]).toBe("done");
+    await expect(run.result()).resolves.toEqual({ code: 1, signal: null });
+    await run.close();
+  }, 15000);
+
   it("emits session_started with the native id", async () => {
     const run = new AcpRun("test:sid", { transport: mockTransport("turn"), cwd: process.cwd() });
     try {
