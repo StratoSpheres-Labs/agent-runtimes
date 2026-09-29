@@ -18,6 +18,7 @@ import { readOpencodeTranscript } from "./transcript.js";
 import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
 import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
@@ -44,6 +45,7 @@ export class OpencodeSession implements AgentSession {
   private readonly resumeGuard = new NativeIdResumeGuard();
   /** Raw detected CLI version — selects the 1.x vs 2.x flag set per run. */
   private readonly cliVersion: string | undefined;
+  private readonly log: RuntimeLogger;
 
   public constructor(options: {
     id: string;
@@ -56,6 +58,7 @@ export class OpencodeSession implements AgentSession {
     workspace?: WorkspaceOptions;
     resumeSessionId?: string;
     cliVersion?: string;
+    logger?: RuntimeLogger;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -66,10 +69,12 @@ export class OpencodeSession implements AgentSession {
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
     this.cliVersion = options.cliVersion;
+    this.log = options.logger ?? silentLogger;
     this.opencodeSessionId = sanitizeResumeId(options.resumeSessionId, "opencode") ?? null;
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
+      logger: this.log,
       runFactory: (runId, prompt, runOpts) => this.createRun(runId, prompt, runOpts),
     });
   }
@@ -144,6 +149,8 @@ export class OpencodeSession implements AgentSession {
       env: Object.keys(env).length > 0 ? env : undefined,
       timeout: runOpts.timeout,
       parser: new OpencodeParser(),
+      logger: this.log,
+      journalSessionId: this.id,
     });
     // Wrap events to capture native session id
     const origEvents = run.events.bind(run);
@@ -164,8 +171,14 @@ export class OpencodeSession implements AgentSession {
                 model: self.model,
                 updatedAt: Date.now(),
               });
-            } catch (_e: unknown) {
-              String(_e);
+            } catch (err: unknown) {
+              // Best-effort persistence: a failed save must not fail the
+              // turn, but it must be visible (resume after restart depends
+              // on it) — warn instead of swallowing.
+              self.log.warn("session-record-save-failed", {
+                sessionId: self.id,
+                message: err instanceof Error ? err.message : String(err),
+              });
             }
           }
           yield e;

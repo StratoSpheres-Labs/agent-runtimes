@@ -92,6 +92,7 @@ after a destructive turn. Interactive turns use `onPermissionRequest` +
 - [ ] No `if (runtime.id === "...")` in `src/core/**` (Rule 1)
 - [ ] No CLI flags leaked to public API (Rule 2)
 - [ ] Transport does not parse; Parser does not manage lifecycle (Rules 3/4)
+- [ ] `journalSessionId: <session id>` passed to every run ctor (`DefaultRun`/`AcpRun`) so turns land in the run journal; `logger` forwarded the same way
 - [ ] `Session !== Process` demonstrated via `tests/session.test.ts` pattern
 - [ ] `RuntimeEvent` is agent-agnostic (Rule 6)
 - [ ] Cross-platform clean (`docs/cross-platform.md`): stdin/file preferred for prompt delivery, `ExecutableDefinition.aliases` covers per-OS binary names, no hardcoded paths/env, fixtures include a `\r\n` variant

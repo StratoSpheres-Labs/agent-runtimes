@@ -387,6 +387,7 @@ import {
 ```
 
 - 默认 `~/.agent-runtimes/sessions/<daemonId>.json`（`homedir()` 取不到则回 `os.tmpdir()`），每次 `session_started` 自动存 `{id,nativeId,cwd,model,updatedAt}`。
+- **尽力而为，非 durable**：存盘跟着 turn 走（永不阻塞 turn），失败只走 logger warning，不抛。把它当 resume 提示缓存——ground truth 是下面的 run journal。记录缺失不代表"没有会话"。
 - 回放：`createSession({ resumeSessionId: nativeId })` 经 `--resume` / `-s` / `exec resume` / `session/load` 重放。
 - Electron 覆盖：
   ```ts
@@ -394,6 +395,11 @@ import {
   setSessionStoreDir(join(app.getPath("userData"), "sessions"));
   ```
 - 单测隔离：`setSessionStoreDir(mkdtempSync(join(tmpdir(),"test-store-")))` + `afterEach: setSessionStoreDir(null)`。
+
+## Run Journal 与 Logger
+
+- **Journal**（`src/core/run-journal.ts`）：每个事件追加到 `<storeDir>/<sessionId>.journal.ndjson`（`{seq, event}`，library session id 键）。崩溃恢复：`readJournal()` 重放，`journalIncomplete()` 报告没到 `done` 的 turn，`stampJournalAborted()` 打标（控制行，非事件）。8MB 压缩 + 30 天 retention。上层拿它做同步/审计/回放——和 wire 同样的 NDJSON 分帧。
+- **Logger**（`createSession({ logger })`，默认静默）：只记生命周期（spawn pid/exit、超时 kill、parser-guard、存盘/journal 警告）——不记 prompt、工具 I/O、argv、env。开发用 `consoleLogger()`，生产嵌自己的 sink。函数不过 JSON（`WireCreateSessionOptions` 排除 `logger`，和 `onPermissionRequest` 一样）。
 
 ---
 

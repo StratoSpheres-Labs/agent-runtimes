@@ -56,6 +56,20 @@ export {
   setSessionStoreDir,
 } from "./core/session-store.js";
 export type { SessionRecord } from "./core/session-store.js";
+export type { RuntimeLogger } from "./definition/logger.js";
+export { silentLogger, consoleLogger } from "./definition/logger.js";
+export type { JournalLine, JournalEventLine, JournalAbortedLine } from "./core/run-journal.js";
+export {
+  appendJournalEvent,
+  readJournal,
+  replayJournalEvents,
+  journalIncomplete,
+  stampJournalAborted,
+  compactJournalFile,
+  clearJournalSeqCache,
+  MAX_JOURNAL_BYTES,
+  JOURNAL_RETAIN_DAYS,
+} from "./core/run-journal.js";
 
 // Core
 export type {

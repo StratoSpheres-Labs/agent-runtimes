@@ -20,8 +20,8 @@ it imports `agent-runtimes` for **types** at most (`import type`).
   `input`/`output`/`cause`/`raw` — the type system rejects them at the
   producer, so `JSON.stringify` never throws or silently drops data.
 - **Session options**: `WireCreateSessionOptions` =
-  `CreateSessionOptions` minus `onPermissionRequest` (a function — it stays
-  in the backend process).
+  `CreateSessionOptions` minus `onPermissionRequest` and `logger`
+  (functions — they stay in the backend process).
 - **Health**: `DoctorReport` / `SessionRecord` / `RuntimeInfo` are plain DTOs.
 
 What never crosses: `onPermissionRequest` handlers, `PermissionRequest`

@@ -10,6 +10,7 @@ import { findAllInstalls, type InstalledCopy } from "../discovery/installs.js";
 import type { AuthStatus } from "../definition/auth.js";
 import type { WorkspaceOptions } from "../definition/workspace.js";
 import type { PermissionHandler } from "../definition/permission.js";
+import type { RuntimeLogger } from "../definition/logger.js";
 import type { SeedMessage } from "../definition/session-inputs.js";
 import { findExecutable } from "../discovery/executable.js";
 import { probeVersion } from "../discovery/version.js";
@@ -107,6 +108,12 @@ export interface CreateSessionOptions {
   onPermissionRequest?: PermissionHandler;
   /** Phase 27: resume a durable native session (capture-style). */
   resumeSessionId?: string;
+  /**
+   * Diagnostics sink (default silent). Forwarded to the session, its runs,
+   * and transports — the embedding app's observability hook. Functions
+   * never cross the JSON wire (excluded from `WireCreateSessionOptions`).
+   */
+  logger?: RuntimeLogger;
 }
 
 // Re-export session/run types for Phase 4 wiring
@@ -255,6 +262,7 @@ export class DefaultRuntime implements AgentRuntime {
     // Phase 4: real session with definition-aware cwd/env; no agent branching
     const session = new DefaultSession({
       cwd: options?.cwd,
+      logger: options?.logger,
       // model/env wiring deferred to adapter buildArgs (Phase 9)
     });
     return session;

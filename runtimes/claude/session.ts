@@ -29,6 +29,7 @@ import type { HistoryOptions, TranscriptEntry } from "../../src/definition/trans
 import { readClaudeTranscript } from "./transcript.js";
 import { imageToBase64 } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
 import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
@@ -58,6 +59,7 @@ export class ClaudeSession implements AgentSession {
   private readonly onPermissionRequest: PermissionHandler | undefined;
   private mcpConfigFile: string | null = null;
   private readonly resumeGuard = new NativeIdResumeGuard();
+  private readonly log: RuntimeLogger;
 
   public constructor(options: {
     id: string;
@@ -74,6 +76,7 @@ export class ClaudeSession implements AgentSession {
     allowedTools?: string[];
     resumeSessionId?: string;
     onPermissionRequest?: PermissionHandler;
+    logger?: RuntimeLogger;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -89,9 +92,11 @@ export class ClaudeSession implements AgentSession {
     this.allowedTools = options.allowedTools;
     this.claudeSessionId = sanitizeResumeId(options.resumeSessionId, "claude") ?? null;
     this.onPermissionRequest = options.onPermissionRequest;
+    this.log = options.logger ?? silentLogger;
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
+      logger: this.log,
       runFactory: (runId, prompt, runOpts) => this.createRun(runId, prompt, runOpts),
     });
   }
@@ -158,6 +163,8 @@ export class ClaudeSession implements AgentSession {
       timeout: runOpts.timeout,
       parser: new ClaudeParser(),
       keepStdinOpen: this.onPermissionRequest !== undefined,
+      logger: this.log,
+      journalSessionId: this.id,
     });
     // Wrap events to capture native session id and handle permission requests
     const origEvents = run.events.bind(run);
@@ -178,8 +185,12 @@ export class ClaudeSession implements AgentSession {
                 model: self.model,
                 updatedAt: Date.now(),
               });
-            } catch (_e: unknown) {
-              String(_e);
+            } catch (err: unknown) {
+              // Best-effort persistence — warn, never fail the turn.
+              self.log.warn("session-record-save-failed", {
+                sessionId: self.id,
+                message: err instanceof Error ? err.message : String(err),
+              });
             }
           }
           if (e.type === "permission_request" && self.onPermissionRequest) {

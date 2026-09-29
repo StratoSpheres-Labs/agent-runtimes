@@ -12,6 +12,8 @@ import type { PermissionHandler, PermissionRequest } from "../definition/permiss
 import type { ImageInput } from "../definition/image.js";
 import { imageToBase64 } from "../definition/image.js";
 import { AcpParser } from "../parser/acp.js";
+import { silentLogger, type RuntimeLogger } from "../definition/logger.js";
+import { appendJournalEvent } from "./run-journal.js";
 import type { AgentRun } from "./run.js";
 
 export interface AcpRunOptions {
@@ -38,6 +40,16 @@ export interface AcpRunOptions {
   onPermissionRequest?: PermissionHandler;
   /** Phase 26: images for this turn (prompt-attached). */
   images?: ImageInput[];
+  /**
+   * Diagnostics sink (default silent). Handshake/turn lifecycle notes
+   * only — never prompt text, images, or tool I/O.
+   */
+  logger?: RuntimeLogger;
+  /**
+   * Library session id for the run journal (`src/core/run-journal.ts`).
+   * Sessions pass their own id; omit to disable journaling for the run.
+   */
+  journalSessionId?: string;
 }
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
@@ -64,6 +76,8 @@ export class AcpRun implements AgentRun {
   private readonly onPermissionRequest: PermissionHandler | undefined;
   private readonly images: ImageInput[] | undefined;
   private readonly timeoutMs: number;
+  private readonly log: RuntimeLogger;
+  private readonly journalSessionId: string | undefined;
   private readonly stream = new EventStream();
   private sessionId: string | null = null;
   private finished = false;
@@ -84,6 +98,8 @@ export class AcpRun implements AgentRun {
     this.images = options.images;
     this.onPermissionRequest = options.onPermissionRequest;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
+    this.log = options.logger ?? silentLogger;
+    this.journalSessionId = options.journalSessionId;
     this.completion = new Promise<ProcessExit>((resolve) => {
       this.completionResolve = resolve;
     });
@@ -104,10 +120,14 @@ export class AcpRun implements AgentRun {
 
   /**
    * Stamp every emitted event with this Run's id. Parser output arrives
-   * unstamped; an explicitly set runId is never overwritten.
+   * unstamped; an explicitly set runId is never overwritten. Journaled
+   * before delivery (ground truth under backpressure drops).
    */
   private push(event: RuntimeEvent): void {
     if (event.runId === undefined) event.runId = this.id;
+    if (this.journalSessionId !== undefined) {
+      appendJournalEvent(this.journalSessionId, event, { logger: this.log });
+    }
     this.stream.push(event);
   }
 
@@ -123,6 +143,10 @@ export class AcpRun implements AgentRun {
     try {
       await this.handshake(prompt);
     } catch (err) {
+      this.log.warn("handshake-failed", {
+        runId: this.id,
+        message: err instanceof Error ? err.message : String(err),
+      });
       await this.close().catch(() => {
         // Cleanup is best-effort; the original handshake error is what
         // the caller must see.
@@ -268,6 +292,7 @@ export class AcpRun implements AgentRun {
     );
     void request.then(undefined, (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
+      this.log.warn("send-failed", { runId: this.id, message });
       this.push({ type: "error", error: { code: "SEND_FAILED", message } });
     });
   }
@@ -363,6 +388,7 @@ export class AcpRun implements AgentRun {
     this.finished = true;
     this._done = true;
     const e = err instanceof Error ? err : new Error(String(err));
+    this.log.warn("turn-failed", { runId: this.id, message: e.message });
     this.push({
       type: "error",
       error: {

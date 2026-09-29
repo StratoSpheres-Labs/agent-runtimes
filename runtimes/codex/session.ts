@@ -20,6 +20,7 @@ import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { normalizeWorkspaceAllowedPaths } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
 import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
@@ -49,6 +50,7 @@ export class CodexSession implements AgentSession {
   private readonly stagedImages: string[] = [];
   private schemaConfigFile: string | null = null;
   private readonly resumeGuard = new NativeIdResumeGuard();
+  private readonly log: RuntimeLogger;
 
   public constructor(options: {
     id: string;
@@ -63,6 +65,7 @@ export class CodexSession implements AgentSession {
     mcpServers?: McpServer[];
     workspace?: WorkspaceOptions;
     resumeSessionId?: string;
+    logger?: RuntimeLogger;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -76,9 +79,11 @@ export class CodexSession implements AgentSession {
     this.mcpServers = options.mcpServers;
     this.workspace = options.workspace;
     this.codexThreadId = sanitizeResumeId(options.resumeSessionId, "codex") ?? null;
+    this.log = options.logger ?? silentLogger;
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
+      logger: this.log,
       runFactory: (runId, prompt, runOpts) => this.createRun(runId, prompt, runOpts),
     });
   }
@@ -155,6 +160,8 @@ export class CodexSession implements AgentSession {
       env,
       timeout: runOpts.timeout,
       parser: new CodexParser(),
+      logger: this.log,
+      journalSessionId: this.id,
     });
     // Wrap events to capture native thread id
     const origEvents = run.events.bind(run);
@@ -175,8 +182,12 @@ export class CodexSession implements AgentSession {
                 model: self.model,
                 updatedAt: Date.now(),
               });
-            } catch (_e: unknown) {
-              String(_e);
+            } catch (err: unknown) {
+              // Best-effort persistence — warn, never fail the turn.
+              self.log.warn("session-record-save-failed", {
+                sessionId: self.id,
+                message: err instanceof Error ? err.message : String(err),
+              });
             }
           }
           yield e;

@@ -84,6 +84,7 @@ export class CodexRuntime extends DefaultRuntime {
       mcpServers,
       workspace,
       resumeSessionId,
+      logger,
     } = options ?? {};
     // Reject inputs this CLI cannot honor before anything spawns: codex
     // has no agent / system-prompt / token-budget / cost-budget / allowlist
@@ -169,6 +170,7 @@ export class CodexRuntime extends DefaultRuntime {
       outputSchema: cleanSchema,
       workspace,
       resumeSessionId,
+      logger,
     });
   }
 

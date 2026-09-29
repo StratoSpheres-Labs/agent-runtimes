@@ -39,6 +39,7 @@ export class OpencodeAcpRuntime extends DefaultRuntime {
       workspace,
       onPermissionRequest,
       resumeSessionId,
+      logger,
     } = options ?? {};
     // Reject inputs with no ACP channel before anything spawns: no
     // reasoning / agent / system-prompt / token-budget / cost-budget /
@@ -76,6 +77,7 @@ export class OpencodeAcpRuntime extends DefaultRuntime {
       workspace,
       onPermissionRequest,
       resumeSessionId,
+      logger,
     });
   }
 

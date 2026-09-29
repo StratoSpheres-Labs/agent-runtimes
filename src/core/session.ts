@@ -1,5 +1,6 @@
 import { RuntimeSessionError } from "./errors.js";
 import { DefaultRun, type AgentRun } from "./run.js";
+import { silentLogger, type RuntimeLogger } from "../definition/logger.js";
 import type { ReasoningOptions } from "../definition/reasoning.js";
 import type { PromptContent } from "../definition/content.js";
 import { splitPromptContent } from "../definition/content.js";
@@ -62,6 +63,8 @@ export interface SessionOptions {
   id?: string;
   cwd?: string;
   env?: Record<string, string | undefined>;
+  /** Diagnostics sink (default silent) — forwarded to runs and transports. */
+  logger?: RuntimeLogger;
   /** Factory to create a Run — core stays agnostic; tests can inject echo process */
   /**
    * Factory to create a Run — core stays agnostic; tests can inject echo process.
@@ -89,6 +92,7 @@ export class DefaultSession implements AgentSession {
   private currentRun: AgentRun | null = null;
   private closed = false;
   private runCounter = 0;
+  protected readonly log: RuntimeLogger;
 
   public constructor(options: SessionOptions & { mcpServers?: McpServer[] } = {}) {
     this.id = options.id ?? generateId();
@@ -96,6 +100,7 @@ export class DefaultSession implements AgentSession {
     this.cwd = options.cwd;
     this.env = options.env;
     this.runFactory = options.runFactory;
+    this.log = options.logger ?? silentLogger;
   }
 
   public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
@@ -133,6 +138,8 @@ export class DefaultSession implements AgentSession {
         env: this.env,
         stdinData,
         timeout: options?.timeout,
+        logger: this.log,
+        journalSessionId: this.id,
       });
     }
 

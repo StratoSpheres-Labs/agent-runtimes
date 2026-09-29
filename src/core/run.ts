@@ -1,5 +1,7 @@
 import { RuntimeProcess, type ProcessExit } from "./lifecycle.js";
 import { RuntimeSessionError, RuntimeTimeoutError } from "./errors.js";
+import { silentLogger, type RuntimeLogger } from "../definition/logger.js";
+import { appendJournalEvent } from "./run-journal.js";
 import { EventStream } from "../events/event-stream.js";
 import type { RuntimeEvent } from "../events/runtime-event.js";
 import type { RuntimeParser } from "../parser/parser.js";
@@ -51,6 +53,17 @@ export interface RunOptions {
   parser?: RuntimeParser;
   /** Phase 29: keep stdin open for interactive permission responses (Claude AskUserQuestion). */
   keepStdinOpen?: boolean;
+  /**
+   * Diagnostics sink (default silent). Turn-lifecycle notes only —
+   * parser-guard hits, stdin failures — never prompt text or tool I/O.
+   */
+  logger?: RuntimeLogger;
+  /**
+   * Library session id for the run journal (`src/core/run-journal.ts`).
+   * Every pushed event is appended (best-effort, never fails the turn).
+   * Sessions pass their own id; omit to disable journaling for the run.
+   */
+  journalSessionId?: string;
 }
 
 export class DefaultRun implements AgentRun {
@@ -64,6 +77,8 @@ export class DefaultRun implements AgentRun {
   private readonly runCommand: string;
   private readonly stream = new EventStream();
   private sawDone = false;
+  protected readonly log: RuntimeLogger;
+  private readonly journalSessionId: string | undefined;
 
   public constructor(id: string, options: RunOptions) {
     this.id = id;
@@ -72,12 +87,15 @@ export class DefaultRun implements AgentRun {
     this.keepStdinOpen = options.keepStdinOpen ?? false;
     this.runCwd = options.cwd;
     this.runCommand = options.command;
+    this.log = options.logger ?? silentLogger;
+    this.journalSessionId = options.journalSessionId;
     this.process = new RuntimeProcess({
       command: options.command,
       args: options.args,
       cwd: options.cwd,
       env: options.env,
       timeout: options.timeout,
+      logger: this.log,
     });
   }
 
@@ -101,10 +119,14 @@ export class DefaultRun implements AgentRun {
   /**
    * Stamp every emitted event with this Run's id (`<sessionId>:run<N>`).
    * Parser output arrives unstamped (Rule 4); an explicitly set runId is
-   * never overwritten.
+   * never overwritten. Journaled before delivery: the journal is ground
+   * truth even when the stream drops under backpressure.
    */
   private push(event: RuntimeEvent): void {
     if (event.runId === undefined) event.runId = this.id;
+    if (this.journalSessionId !== undefined) {
+      appendJournalEvent(this.journalSessionId, event, { logger: this.log });
+    }
     this.stream.push(event);
   }
 
@@ -124,11 +146,13 @@ export class DefaultRun implements AgentRun {
           try {
             events = parser.parse(new Uint8Array(chunk));
           } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.log.warn("parser-error", { runId: this.id, message });
             this.push({
               type: "error",
               error: {
                 code: "PARSER_ERROR",
-                message: err instanceof Error ? err.message : String(err),
+                message,
               },
             });
             return;
@@ -174,6 +198,7 @@ export class DefaultRun implements AgentRun {
         },
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
+          this.log.warn("stdin-write-failed", { runId: this.id, message });
           this.push({
             type: "error",
             error: { code: "STDIN_WRITE_FAILED", message },
@@ -196,11 +221,13 @@ export class DefaultRun implements AgentRun {
             flushed = parser.flush();
           } catch (err) {
             flushed = [];
+            const message = err instanceof Error ? err.message : String(err);
+            this.log.warn("parser-flush-error", { runId: this.id, message });
             this.push({
               type: "error",
               error: {
                 code: "PARSER_ERROR",
-                message: err instanceof Error ? err.message : String(err),
+                message,
               },
             });
           }

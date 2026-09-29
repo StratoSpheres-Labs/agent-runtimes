@@ -15,6 +15,7 @@ import type { PermissionHandler } from "../../src/definition/permission.js";
 import type { HistoryOptions, TranscriptEntry } from "../../src/definition/transcript.js";
 import { readOpencodeTranscript } from "../opencode/transcript.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
+import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
@@ -39,6 +40,7 @@ export class OpencodeAcpSession implements AgentSession {
   public readonly mcpServers: McpServer[] | undefined;
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly onPermissionRequest: PermissionHandler | undefined;
+  private readonly log: RuntimeLogger;
 
   public constructor(options: {
     id: string;
@@ -49,6 +51,7 @@ export class OpencodeAcpSession implements AgentSession {
     workspace?: WorkspaceOptions;
     onPermissionRequest?: PermissionHandler;
     resumeSessionId?: string;
+    logger?: RuntimeLogger;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -58,12 +61,14 @@ export class OpencodeAcpSession implements AgentSession {
     this.workspace = options.workspace;
     this.onPermissionRequest = options.onPermissionRequest;
     this.acpSessionId = sanitizeResumeId(options.resumeSessionId, "opencode-acp") ?? null;
+    this.log = options.logger ?? silentLogger;
     // NOTE: no reasoning passthrough 鈥?capabilities.reasoning is false
     // (no control channel wired); CreateSessionOptions.reasoning is
     // intentionally not forwarded.
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
+      logger: this.log,
       runFactory: async (runId, prompt, runOpts) => this.createRun(runId, prompt, runOpts),
     });
   }
@@ -101,6 +106,7 @@ export class OpencodeAcpSession implements AgentSession {
       args: [...launch.prependArgs, "acp"],
       cwd: this.cwd,
       env,
+      logger: this.log,
     });
     const run = new AcpRun(runId, {
       transport,
@@ -111,6 +117,8 @@ export class OpencodeAcpSession implements AgentSession {
       images: [...partImages, ...(runOpts.images ?? [])],
       timeoutMs: runOpts.timeout,
       resumeSessionId: this.acpSessionId ?? undefined,
+      logger: this.log,
+      journalSessionId: this.id,
     });
     await run.start(text);
     // start() resolves only after a successful handshake, so the native id
@@ -126,8 +134,12 @@ export class OpencodeAcpSession implements AgentSession {
           model: this.model,
           updatedAt: Date.now(),
         });
-      } catch (_e: unknown) {
-        String(_e);
+      } catch (err: unknown) {
+        // Best-effort persistence — warn, never fail the turn.
+        this.log.warn("session-record-save-failed", {
+          sessionId: this.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
     return run;

@@ -1,6 +1,7 @@
 import { RuntimeProcess, type SpawnOptions } from "../core/lifecycle.js";
 import { RuntimeProtocolError, RuntimeTimeoutError } from "../core/errors.js";
 import { MAX_PARSER_BUFFER_BYTES } from "../parser/jsonl.js";
+import { silentLogger, type RuntimeLogger } from "../definition/logger.js";
 import type { McpServer } from "../definition/mcp.js";
 
 /**
@@ -83,10 +84,12 @@ export class AcpTransport {
   private agentRequestHandler: AcpAgentRequestHandler | null = null;
   private readonly decoder = new TextDecoder();
   private buf = "";
+  private readonly log: RuntimeLogger;
 
   public constructor(options: SpawnOptions) {
     this.process = new RuntimeProcess(options);
     this.command = options.command;
+    this.log = options.logger ?? silentLogger;
   }
 
   public get pid(): number | undefined {
@@ -108,8 +111,12 @@ export class AcpTransport {
       this.onBytes(chunk);
     });
     // Drain stderr so a chatty agent can never block on a full pipe.
-    // Logs are discarded in v0.1 (no logger hook yet).
-    this.process.stderr?.on("data", () => {});
+    // Lines go to the injected logger (default silent) — never parsed
+    // as protocol (Rule 3), never dropped without a sink.
+    this.process.stderr?.on("data", (chunk: Buffer) => {
+      const line = chunk.toString("utf-8").trim();
+      if (line.length > 0) this.log.debug("stderr", { command: this.command, line });
+    });
     void this.process.wait().then(
       () => {
         this.onProcessEnd();
@@ -218,6 +225,7 @@ export class AcpTransport {
         `ACP transport buffer overflow: retained line exceeded ${String(MAX_PARSER_BUFFER_BYTES)} bytes — closing connection`,
         { command: this.command },
       );
+      this.log.warn("overflow", { command: this.command, cap: MAX_PARSER_BUFFER_BYTES });
       this.failAllPending(err);
       void this.close().catch(() => {
         // Close already funnels through failAllPending; nothing more to do.

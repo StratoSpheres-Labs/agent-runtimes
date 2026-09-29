@@ -10,14 +10,17 @@ import { RuntimeProtocolError } from "./core/errors.js";
  * `JsonValue`); this module pins down the two remaining pieces:
  *
  * - `WireCreateSessionOptions`: `CreateSessionOptions` minus
- *   `onPermissionRequest`, which is a function and can never cross the wire.
+ *   `onPermissionRequest` and `logger`, which are functions and can never
+ *   cross the wire.
  *   The permission flow stays in-process: the backend holds the handler and
  *   forwards `permission_request` events / `respondToPermission` answers.
+ *   The logger stays in-process for the same reason: the backend holds the
+ *   sink and only JSON crosses.
  * - NDJSON framing: one event per line (`encode`/`decode`), so consumers
  *   split on `\n` instead of reassembling partial JSON.
  */
 
-export type WireCreateSessionOptions = Omit<CreateSessionOptions, "onPermissionRequest">;
+export type WireCreateSessionOptions = Omit<CreateSessionOptions, "onPermissionRequest" | "logger">;
 
 /**
  * Mid-run steering across the wire (BFF → agent backend). The frontend

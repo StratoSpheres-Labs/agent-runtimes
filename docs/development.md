@@ -394,6 +394,7 @@ import {
 ```
 
 - Default store: `~/.agent-runtimes/sessions/<daemonId>.json` (`homedir()` fallback `os.tmpdir()`). Each `session_started` auto-saves `{id,nativeId,cwd,model,updatedAt}`.
+- **Best-effort, not durable**: saves ride the turn (never fail it) and a failed save surfaces as a `session-record-save-failed` logger warning, never a throw. Treat the store as a resume hint cache — the run journal below is the ground truth. Never present a missing record as "no sessions exist".
 - Hydration: `createSession({ resumeSessionId: nativeId })` replays via `--resume` / `-s` / `exec resume` / `session/load`.
 - Electron override:
   ```ts
@@ -401,6 +402,11 @@ import {
   setSessionStoreDir(join(app.getPath("userData"), "sessions"));
   ```
 - Tests isolate with `setSessionStoreDir(mkdtempSync(join(tmpdir(),"test-store-")))` + `afterEach: setSessionStoreDir(null)`.
+
+## Run Journal & Logger
+
+- **Journal** (`src/core/run-journal.ts`): every emitted event appends to `<storeDir>/<sessionId>.journal.ndjson` (`{seq, event}`), keyed by library session id. Crash recovery: `readJournal()` replays, `journalIncomplete()` reports a turn that never reached `done`, `stampJournalAborted()` marks it (control line, never a `RuntimeEvent`). 8MB compaction + 30-day retention. Upper layers tail these files for sync/audit/replay — same NDJSON framing as the wire.
+- **Logger** (`createSession({ logger })`, default silent): lifecycle notes (spawn pid/exit, timeout kills, parser-guard hits, save/journal warnings) — never prompts, tool I/O, argv, or env. `consoleLogger()` exists for development; production embeds a structured sink. Functions never cross JSON (`WireCreateSessionOptions` omits `logger` like `onPermissionRequest`).
 
 ---
 

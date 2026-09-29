@@ -66,7 +66,7 @@ for await (const e of run.events()) {
 }
 ```
 
-Unified `RuntimeEvent` only: `session_started | text_delta | reasoning_delta | tool_started | tool_finished | usage | permission_request | permission_denied | error | done` (`src/events/runtime-event.ts:1`). No `stdout/stderr/JSONL` leaks. The `error` event carries a machine-readable `error.code` taxonomy (see `docs/frontend.md` "Error codes").
+Unified `RuntimeEvent` only: `session_started | text_delta | reasoning_delta | tool_started | tool_finished | usage | permission_request | permission_denied | error | done` (`src/events/runtime-event.ts:1`). No `stdout/stderr/JSONL` leaks. The `error` event carries a machine-readable `error.code` taxonomy (see `docs/frontend.md` "Error codes"). Every emitted event is also appended to the session run journal (`src/core/run-journal.ts:1`) before delivery.
 
 ## Capability > Name
 

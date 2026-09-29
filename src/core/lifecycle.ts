@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { RuntimeSpawnError, RuntimeTimeoutError } from "./errors.js";
+import { silentLogger, type RuntimeLogger } from "../definition/logger.js";
 
 // ---------------------------------------------------------------------------
 // Types — Dev_Docs Tasks 3.2 / 3.3
@@ -20,6 +21,11 @@ export interface SpawnOptions {
   env?: Record<string, string | undefined>;
   /** Optional timeout in ms — triggers kill + RuntimeTimeoutError */
   timeout?: number;
+  /**
+   * Diagnostics sink (default silent). Lifecycle notes only — spawn pid,
+   * timeout kills, escalation — never argv (paths/ids) or env (secrets).
+   */
+  logger?: RuntimeLogger;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,9 +45,11 @@ export class RuntimeProcess {
   private closePromise: Promise<ProcessExit> | null = null;
   private closeResolve: ((e: ProcessExit) => void) | null = null;
   private readonly options: SpawnOptions;
+  private readonly log: RuntimeLogger;
 
   public constructor(options: SpawnOptions) {
     this.options = options;
+    this.log = options.logger ?? silentLogger;
   }
 
   // ---- public getters ----
@@ -99,6 +107,7 @@ export class RuntimeProcess {
 
     this.child = child;
     this.state = "running";
+    this.log.debug("spawn", { command: this.options.command, pid: child.pid });
     this.exitPromise = new Promise<ProcessExit>((resolve, reject) => {
       this.exitResolve = resolve;
       this.exitReject = reject;
@@ -130,6 +139,7 @@ export class RuntimeProcess {
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
       const exit: ProcessExit = { code, signal: signal as unknown as NodeJS.Signals | null };
       this.lastExit = exit;
+      this.log.debug("exit", { command: this.options.command, code, signal });
       this.closeResolve?.(exit);
       this.exitResolve?.(exit);
     });
@@ -187,6 +197,11 @@ export class RuntimeProcess {
   private async timeout(): Promise<void> {
     if (this.state !== "running" && this.state !== "starting") return;
     this.state = "stopping";
+    this.log.warn("timeout", {
+      command: this.options.command,
+      pid: this.child?.pid,
+      timeoutMs: this.options.timeout,
+    });
     // 1) Reject wait() immediately so RuntimeTimeoutError reaches the caller
     this.exitReject?.(
       new RuntimeTimeoutError(`Process timed out after ${String(this.options.timeout)}ms`, {
@@ -211,6 +226,7 @@ export class RuntimeProcess {
     const fallback = new Promise<ProcessExit>((resolve) => {
       const grace = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) {
+          this.log.debug("escalate", { command: this.options.command, signal: "SIGKILL" });
           try {
             child.kill("SIGKILL");
           } catch {
