@@ -2,9 +2,16 @@
 
 ![agent-runtimes](./docs/for_README/agent_runtimes_hero_img_ZH.png)
 
-[English](./README.md) | 中文
+<p align="center">
+  <a href="./README.md">English</a>
+</p>
 
-[![npm](https://img.shields.io/npm/v/@stratosphereslab/agent-runtimes)](https://www.npmjs.com/package/@stratosphereslab/agent-runtimes)
+<p align="center">
+  <a href="https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml"><img src="https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/StratoSpheres-Labs/agent-runtimes/releases"><img src="https://img.shields.io/github/v/release/StratoSpheres-Labs/agent-runtimes?color=blue&label=version" alt="Version" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="node" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
+</p>
 
 `agent-runtimes` 是一个 Node.js/TypeScript 兼容层，通过统一的 `Runtime → Session → Run → RuntimeEvent` API，把本地 Agent CLI 的发现、启动、控制与观测方式统一起来。
 
@@ -115,6 +122,13 @@ await session.close();
 agent-runtimes -d opencode
 agent-runtimes -d claude
 agent-runtimes -d codex
+
+# 不带 id：一次性检查所有已注册 runtime
+agent-runtimes -d
+
+# 给 setup 向导用的机器可读报告，以及 bin 自身版本
+agent-runtimes -d --json
+agent-runtimes --version
 
 # 本地构建——同一条路，长写法（从源码永远可用）
 node dist/cli.js doctor opencode

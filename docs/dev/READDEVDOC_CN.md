@@ -6,11 +6,11 @@
 
 ## 目录
 
-| 分区 | 页面                                                                                                                                                                                 |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 入门 | [概览](./getting-started/overview.zh-CN.md) · [101](./getting-started/101.zh-CN.md) · [安装](./getting-started/install.zh-CN.md) · [快速上手](./getting-started/quickstart.zh-CN.md) |
-| 架构 | [architecture.md](../architecture.md)（模型 + 七条硬规则）· [development.zh-CN.md](../development.zh-CN.md)（环境、测试分层、发版）                                                  |
-| 约定 | [frontend.md](../frontend.md)（传输约定 + 错误码）· [runtime-authoring.md](../runtime-authoring.md)（新 adapter）· [cross-platform.md](../cross-platform.md)                         |
+| 分区 | 页面                                                                                                                                                                                                                         |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 入门 | [概览](./getting-started/overview.zh-CN.md) · [101](./getting-started/101.zh-CN.md) · [安装](./getting-started/install.zh-CN.md) · [快速上手](./getting-started/quickstart.zh-CN.md) · [BFF](./getting-started/bff.zh-CN.md) |
+| 架构 | [architecture.md](../architecture.md)（模型 + 七条硬规则）· [development.zh-CN.md](../development.zh-CN.md)（环境、测试分层、发版）                                                                                          |
+| 约定 | [frontend.md](../frontend.md)（传输约定 + 错误码）· [runtime-authoring.md](../runtime-authoring.md)（新 adapter）· [cross-platform.md](../cross-platform.md)                                                                 |
 
 ## 地图
 

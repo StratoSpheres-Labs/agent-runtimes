@@ -11,6 +11,7 @@
 - 101: docs/dev/getting-started/101.md — why CLIs differ and what gets normalized.
 - Install: docs/dev/getting-started/install.md — build from source, verify with doctor.
 - Quickstart: docs/dev/getting-started/quickstart.md — first run: detect → session → run → events.
+- BFF: docs/dev/getting-started/bff.md — the thin slice above the library: SSE endpoint, drain/cancel/permission rules, runId grouping (demo: examples/bff-sse.ts).
 
 ## Architecture (docs/)
 

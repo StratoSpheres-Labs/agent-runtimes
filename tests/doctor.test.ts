@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   doctor,
   doctorExitCode,
@@ -164,17 +165,111 @@ describe("cli main()", () => {
     expect(err.mock.calls.join("\n")).toContain("error:");
   });
 
-  it("exits 2 with usage when the flag has no id", async () => {
+  it("bare -d checks every registered runtime (missing ones report, never abort)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    await expect(main(["-d"])).resolves.toBe(2);
-    await expect(main(["--doctor"])).resolves.toBe(2);
-    expect(log.mock.calls.join("\n")).toContain("Usage:");
+    const registry = {
+      list: (): string[] => ["a", "b"],
+      resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+    };
+    await expect(main(["-d"], registry)).resolves.toBe(0);
+    await expect(main(["--doctor"], registry)).resolves.toBe(0);
+    // Two full reports, one per listed id.
+    expect(log.mock.calls.join("\n").split("Agent Runtime Doctor").length - 1).toBe(4);
   });
 
-  it("exits 0 with usage on -h/--help", async () => {
+  it("bare -d exits 1 when a runtime cannot be checked, but still checks the rest", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const registry = {
+      list: (): string[] => ["ok", "broken"],
+      resolve: (id: string): Promise<AgentRuntime> =>
+        id === "broken"
+          ? Promise.reject(new Error("no such runtime"))
+          : Promise.resolve(healthyStub()),
+    };
+    await expect(main(["-d"], registry)).resolves.toBe(1);
+    const out = log.mock.calls.join("\n");
+    expect(out).toContain("### broken: error: no such runtime");
+    // The healthy one still got its full report (one title, not two).
+    expect(out.split("Agent Runtime Doctor").length - 1).toBe(1);
+  });
+
+  it("bare doctor checks every registered runtime like bare -d", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const registry = {
+      list: (): string[] => ["a", "b"],
+      resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+    };
+    await expect(main(["doctor"], registry)).resolves.toBe(0);
+    expect(log.mock.calls.join("\n").split("Agent Runtime Doctor").length - 1).toBe(2);
+  });
+
+  it("reports the package version (never a hardcoded constant)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { version: string };
+    await expect(main(["--version"])).resolves.toBe(0);
+    await expect(main(["-V"])).resolves.toBe(0);
+    expect(log.mock.calls).toContainEqual([pkg.version]);
+  });
+
+  it("lists registry ids in usage instead of a hardcoded roster", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const registry = {
+      list: (): string[] => ["x", "y"],
+      resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+    };
+    await expect(main([], registry)).resolves.toBe(2);
+    expect(log.mock.calls.join("\n")).toContain("x, y");
+  });
+
+  it("--json prints one machine-readable report", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const registry = {
+      list: (): string[] => ["a"],
+      resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+    };
+    await expect(main(["doctor", "a", "--json"], registry)).resolves.toBe(0);
+    const parsed = JSON.parse(log.mock.calls.map((c) => String(c[0])).join("\n")) as {
+      checks: unknown[];
+    };
+    expect(Array.isArray(parsed.checks)).toBe(true);
+  });
+
+  it("--json prints an array for all-mode, failures attributed", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const registry = {
+      list: (): string[] => ["ok", "broken"],
+      resolve: (id: string): Promise<AgentRuntime> =>
+        id === "broken"
+          ? Promise.reject(new Error("no such runtime"))
+          : Promise.resolve(healthyStub()),
+    };
+    await expect(main(["-d", "--json"], registry)).resolves.toBe(1);
+    const parsed = JSON.parse(log.mock.calls.map((c) => String(c[0])).join("\n")) as Array<{
+      id?: string;
+      error?: string;
+    }>;
+    expect(parsed).toHaveLength(2);
+    expect(parsed.find((r) => r.id === "broken")?.error).toBe("no such runtime");
+  });
+
+  it("bare -d reports an uninstalled runtime inline (not a crash)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const rt = healthyStub();
+    rt.detect = () => Promise.resolve({ installed: false });
+    const registry = {
+      list: (): string[] => ["gone"],
+      resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(rt),
+    };
+    await expect(main(["-d"], registry)).resolves.toBe(1);
+    expect(log.mock.calls.join("\n")).toContain("Stub");
+  });
+
+  it("exits 0 with usage on the whole help family", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await expect(main(["-h"])).resolves.toBe(0);
     await expect(main(["--help"])).resolves.toBe(0);
+    await expect(main(["-help"])).resolves.toBe(0);
+    await expect(main(["help"])).resolves.toBe(0);
     expect(log.mock.calls.join("\n")).toContain("Usage:");
   });
 });

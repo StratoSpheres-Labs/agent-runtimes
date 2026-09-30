@@ -2,12 +2,16 @@
 
 ![agent-runtimes](./docs/for_README/agent_runtimes_hero_img.png)
 
-[English](./README.md) | [中文](./README.zh-CN.md)
+<p align="center">
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
-[![CI](https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml/badge.svg)](https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@stratosphereslab/agent-runtimes)](https://www.npmjs.com/package/@stratosphereslab/agent-runtimes)
-[![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+<p align="center">
+  <a href="https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml"><img src="https://github.com/StratoSpheres-Labs/agent-runtimes/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/StratoSpheres-Labs/agent-runtimes/releases"><img src="https://img.shields.io/github/v/release/StratoSpheres-Labs/agent-runtimes?color=blue&label=version" alt="Version" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="node" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
+</p>
 
 `agent-runtimes` is a Node.js/TypeScript compatibility layer that unifies discovery, launch, control, and observation of local Agent CLIs through a single `Runtime → Session → Run → RuntimeEvent` API.
 
@@ -119,6 +123,13 @@ failures, `2` on usage error:
 agent-runtimes -d opencode
 agent-runtimes -d claude
 agent-runtimes -d codex
+
+# No id: check every registered runtime in one go
+agent-runtimes -d
+
+# Machine-readable reports for setup wizards, plus the bin version
+agent-runtimes -d --json
+agent-runtimes --version
 
 # Local build — same path, long form (always works from source)
 node dist/cli.js doctor opencode

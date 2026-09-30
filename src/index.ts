@@ -1,4 +1,21 @@
-export const version = "0.1.1";
+import { createRequire } from "node:module";
+
+/**
+ * Library version, read from `package.json` (never hardcoded — a stale
+ * constant once shipped a full release behind). `createRequire` survives
+ * bundling untouched, and npm always ships `package.json` alongside dist.
+ */
+function readPackageVersion(): string {
+  try {
+    const pkg = createRequire(import.meta.url)("../package.json") as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
+  } catch {
+    // Packed or relocated oddly — fall through to the sentinel below.
+  }
+  return "0.0.0-unknown";
+}
+
+export const version: string = readPackageVersion();
 
 // Definition
 export type { RuntimeDefinition } from "./definition/index.js";
