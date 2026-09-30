@@ -22,12 +22,12 @@
 
 ## 支持的 runtime
 
-| ID                                                                                                       | Agent            | 会话续接                    | 实时模型       | 认证探测                  | MCP 发现         |
-| -------------------------------------------------------------------------------------------------------- | ---------------- | --------------------------- | -------------- | ------------------------- | ---------------- |
-| <img src="./docs/for_README/icon/opencode.png" height="48" alt="OpenCode" /><br />`opencode`             | OpenCode CLI     | `-s`（capture 式）          | `models`       | `auth list` + `auth.json` | `mcp list`       |
-| <img src="./docs/for_README/icon/opencode.png" height="48" alt="OpenCode via ACP" /><br />`opencode-acp` | OpenCode via ACP | `session/load`              | —              | —                         | 经 `session/new` |
-| <img src="./docs/for_README/icon/claudecode-color.png" height="48" alt="Claude Code" /><br />`claude`    | Claude Code      | `--resume`（capture 式）    | 静态别名¹      | `login status`            | `mcp list`       |
-| <img src="./docs/for_README/icon/codex-color.png" height="48" alt="Codex" /><br />`codex`                | Codex CLI        | `exec resume`（capture 式） | `debug models` | `login status`            | `mcp list`       |
+| ID             | Agent                                                                                                 | 会话续接                    | 实时模型       | 认证探测                  | MCP 发现         |
+| -------------- | ----------------------------------------------------------------------------------------------------- | --------------------------- | -------------- | ------------------------- | ---------------- |
+| `opencode`     | <img src="./docs/for_README/icon/opencode.png" height="32" alt="OpenCode" /> OpenCode CLI             | `-s`（capture 式）          | `models`       | `auth list` + `auth.json` | `mcp list`       |
+| `opencode-acp` | <img src="./docs/for_README/icon/opencode.png" height="32" alt="OpenCode via ACP" /> OpenCode via ACP | `session/load`              | —              | —                         | 经 `session/new` |
+| `claude`       | <img src="./docs/for_README/icon/claudecode-color.png" height="32" alt="Claude Code" /> Claude Code   | `--resume`（capture 式）    | 静态别名¹      | `login status`            | `mcp list`       |
+| `codex`        | <img src="./docs/for_README/icon/codex-color.png" height="32" alt="Codex" /> Codex CLI                | `exec resume`（capture 式） | `debug models` | `login status`            | `mcp list`       |
 
 ¹ Claude Code 没有 list-models 子命令，因此 `sonnet` / `opus` / `haiku`（+ `claude-*-5-*` 全名）为手工维护的静态表。
 
