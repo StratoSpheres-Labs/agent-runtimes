@@ -22,12 +22,12 @@ Developer docs : [Docs](./docs/dev/READDEVDOC.md)
 
 ## Supported runtimes
 
-| ID                                                                                                  | Session resume                | Live models     | Auth probe                | MCP discovery     |
-| --------------------------------------------------------------------------------------------------- | ----------------------------- | --------------- | ------------------------- | ----------------- |
-| <img src="./docs/for_README/icon/opencode.png" height="32" alt="OpenCode" /> `opencode`             | `-s` (capture-style)          | `models`        | `auth list` + `auth.json` | `mcp list`        |
-| <img src="./docs/for_README/icon/opencode.png" height="32" alt="OpenCode via ACP" /> `opencode-acp` | `session/load`                | —               | —                         | via `session/new` |
-| <img src="./docs/for_README/icon/claudecode-color.png" height="32" alt="Claude Code" /> `claude`    | `--resume` (capture-style)    | static aliases¹ | `login status`            | `mcp list`        |
-| <img src="./docs/for_README/icon/codex-color.png" height="32" alt="Codex" /> `codex`                | `exec resume` (capture-style) | `debug models`  | `login status`            | `mcp list`        |
+| ID                                                                                                                 | Session resume                | Live models     | Auth probe                | MCP discovery     |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------- | --------------- | ------------------------- | ----------------- |
+| <img src="./docs/for_README/icon/opencode.png" height="32" align="middle" alt="OpenCode" /> `opencode`             | `-s` (capture-style)          | `models`        | `auth list` + `auth.json` | `mcp list`        |
+| <img src="./docs/for_README/icon/opencode.png" height="32" align="middle" alt="OpenCode via ACP" /> `opencode-acp` | `session/load`                | —               | —                         | via `session/new` |
+| <img src="./docs/for_README/icon/claudecode-color.png" height="32" align="middle" alt="Claude Code" /> `claude`    | `--resume` (capture-style)    | static aliases¹ | `login status`            | `mcp list`        |
+| <img src="./docs/for_README/icon/codex-color.png" height="32" align="middle" alt="Codex" /> `codex`                | `exec resume` (capture-style) | `debug models`  | `login status`            | `mcp list`        |
 
 ¹ Claude Code has no list-models subcommand, so `sonnet` / `opus` / `haiku` (+ full `claude-*-5-*` names) are curated statically.
 
