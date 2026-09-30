@@ -1,0 +1,35 @@
+name: Release
+# Auto-create a GitHub Release page for every version tag push:
+# `git tag v0.1.3 && git push origin v0.1.3`.
+# This only writes the Release object (auto-generated notes + link to the
+# tag) — npm publishing stays in publish.yml, untouched. Creating a Release
+# from the web UI does NOT retrigger this (the trigger is the tag push,
+# not the release event).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create releases
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # never cancel a release mid-flight
+
+jobs:
+  release:
+    name: create github release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create release (skip if it already exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — skipping"
+          else
+            gh release create "$TAG" --generate-notes
+          fi
