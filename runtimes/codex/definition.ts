@@ -85,7 +85,7 @@ export const codexDefinition: RuntimeDefinition = {
     // <0.143.0 rejecting ChatGPT-backed models (e.g. gpt-5.6-terra) that
     // 0.143.0+ starts fine. Tested = this library's verified installs.
     minimum: "0.143.0",
-    tested: ["0.150.1", "0.156.1", "0.157.1"],
+    tested: ["0.150.1", "0.156.1", "0.157.1", "0.159.2"],
   },
   models: {
     // No static fallback: the shipped list goes stale fast (and a wrong

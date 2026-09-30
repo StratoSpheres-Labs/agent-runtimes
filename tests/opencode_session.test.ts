@@ -81,4 +81,27 @@ describe("OpencodeSession resume", () => {
     expect(run3.done).toBe(false);
     await sess.close();
   });
+
+  it("queue:true defers the guard to dispatch (no throw at enqueue)", async () => {
+    // Same undrained setup as above, but queued: enqueue must not throw
+    // (the guard moves to createRun at dispatch). Draining run 1 to its
+    // idless done proves a fresh start safe, so run 2 dispatches.
+    const sess = new OpencodeSession({
+      id: "wq",
+      command: "agent-runtimes-missing-xyz",
+      cwd,
+    });
+    const run1 = await sess.run("x");
+    const p2 = sess.run("y", { queue: true });
+    for await (const e of run1.events()) {
+      if (e.type === "done") break;
+    }
+    const run2 = await p2;
+    expect(run2.done).toBe(false);
+    for await (const e of run2.events()) {
+      if (e.type === "done") break;
+    }
+    expect(run2.done).toBe(true);
+    await sess.close();
+  });
 });

@@ -64,6 +64,14 @@ export interface RunOptions {
    * Sessions pass their own id; omit to disable journaling for the run.
    */
   journalSessionId?: string;
+  /**
+   * Stall watchdog: fire when no event arrives for this many ms (a live
+   * but silent agent — distinct from `timeout`, which caps total turn
+   * time). Firing emits `error{code:"STALL"}` and cancels the run, so the
+   * stream still ends with `done`. Undefined/non-positive disables.
+   * Sessions forward per-run `stallTimeoutMs`.
+   */
+  stallTimeoutMs?: number;
 }
 
 export class DefaultRun implements AgentRun {
@@ -79,6 +87,9 @@ export class DefaultRun implements AgentRun {
   private sawDone = false;
   protected readonly log: RuntimeLogger;
   private readonly journalSessionId: string | undefined;
+  private readonly stallTimeoutMs: number | undefined;
+  private stallTimer: NodeJS.Timeout | null = null;
+  private stallFired = false;
 
   public constructor(id: string, options: RunOptions) {
     this.id = id;
@@ -89,6 +100,7 @@ export class DefaultRun implements AgentRun {
     this.runCommand = options.command;
     this.log = options.logger ?? silentLogger;
     this.journalSessionId = options.journalSessionId;
+    this.stallTimeoutMs = options.stallTimeoutMs;
     this.process = new RuntimeProcess({
       command: options.command,
       args: options.args,
@@ -128,6 +140,47 @@ export class DefaultRun implements AgentRun {
       appendJournalEvent(this.journalSessionId, event, { logger: this.log });
     }
     this.stream.push(event);
+    if (event.type === "done") {
+      this.clearStall();
+    } else {
+      this.armStall();
+    }
+  }
+
+  /**
+   * Stall watchdog: any event counts as progress. Firing kills a silent
+   * turn (error + cancel → terminal `done`), never a finished one — the
+   * guard covers timers that outlive their run. Unref'd: a watchdog never
+   * keeps the host alive.
+   */
+  private armStall(): void {
+    const ms = this.stallTimeoutMs;
+    if (ms === undefined || ms <= 0) return;
+    this.clearStall();
+    this.stallTimer = setTimeout(() => {
+      this.stallTimer = null;
+      if (this._done || this.sawDone || this.stallFired) return;
+      this.stallFired = true;
+      this.log.warn("stall", { runId: this.id, stallTimeoutMs: ms });
+      this.push({
+        type: "error",
+        error: {
+          code: "STALL",
+          message: `No events for ${String(ms)}ms — treating the turn as stalled`,
+        },
+      });
+      void this.cancel().catch(() => {
+        // cancel() funnels through the guarded paths; nothing more to do.
+      });
+    }, ms);
+    this.stallTimer.unref();
+  }
+
+  private clearStall(): void {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = null;
+    }
   }
 
   /** Spawn the underlying process and wire stdout → RuntimeEvent */
@@ -280,6 +333,7 @@ export class DefaultRun implements AgentRun {
 
   public async cancel(): Promise<void> {
     if (this._done) return;
+    this.clearStall();
     let exit: ProcessExit | null = null;
     try {
       exit = await this.process.cancel();
@@ -315,6 +369,7 @@ export class DefaultRun implements AgentRun {
   }
 
   public async close(): Promise<void> {
+    this.clearStall();
     await this.process.close();
     this._done = true;
     this.stream.close();

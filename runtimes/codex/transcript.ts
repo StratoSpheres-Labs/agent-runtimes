@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  redactTranscriptEntries,
   selectHistory,
   toMs,
   truncateTranscriptText,
@@ -36,7 +37,10 @@ export function readCodexTranscript(options: CodexTranscriptOptions): Transcript
   } catch {
     return [];
   }
-  return selectHistory(parseCodexRollout(text), options);
+  return redactTranscriptEntries(
+    selectHistory(parseCodexRollout(text), options),
+    options.includeRawInputs,
+  );
 }
 
 /**

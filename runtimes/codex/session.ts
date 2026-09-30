@@ -21,6 +21,8 @@ import { normalizeWorkspaceAllowedPaths } from "../../src/definition/workspace.j
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
 import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
+import { IdleReaper } from "../../src/core/idle-reaper.js";
+import { trackSession } from "../../src/core/session-tracker.js";
 import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
@@ -51,6 +53,7 @@ export class CodexSession implements AgentSession {
   private schemaConfigFile: string | null = null;
   private readonly resumeGuard = new NativeIdResumeGuard();
   private readonly log: RuntimeLogger;
+  private readonly reaper: IdleReaper;
 
   public constructor(options: {
     id: string;
@@ -66,6 +69,7 @@ export class CodexSession implements AgentSession {
     workspace?: WorkspaceOptions;
     resumeSessionId?: string;
     logger?: RuntimeLogger;
+    idleTimeoutMs?: number;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -80,6 +84,15 @@ export class CodexSession implements AgentSession {
     this.workspace = options.workspace;
     this.codexThreadId = sanitizeResumeId(options.resumeSessionId, "codex") ?? null;
     this.log = options.logger ?? silentLogger;
+    this.reaper = new IdleReaper(
+      options.idleTimeoutMs,
+      () => !this.inner.hasActiveRun(),
+      () => this.close(),
+      this.log,
+    );
+    trackSession(this);
+    // Arm at birth: a session with no runs yet is already idle.
+    this.reaper.activity();
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
@@ -89,6 +102,9 @@ export class CodexSession implements AgentSession {
   }
 
   private createRun(runId: string, prompt: PromptContent, runOpts: SessionRunOptions): AgentRun {
+    // Re-asserted at dispatch (see OpencodeSession): queued turns start
+    // only on a drained predecessor.
+    this.resumeGuard.assertCanStartRun(this.codexThreadId, this.id, "codex", "thread");
     this.resumeGuard.noteRunCreated();
     // Phase 21: the codex CLI has no MCP wiring — fail loudly instead of
     // silently dropping the caller's servers (never ignore mcpServers).
@@ -159,6 +175,7 @@ export class CodexSession implements AgentSession {
       stdinData: text,
       env,
       timeout: runOpts.timeout,
+      stallTimeoutMs: runOpts.stallTimeoutMs,
       parser: new CodexParser(),
       logger: this.log,
       journalSessionId: this.id,
@@ -171,6 +188,7 @@ export class CodexSession implements AgentSession {
       return (async function* () {
         for await (const e of origEvents()) {
           self.resumeGuard.noteEvent(e.type, self.codexThreadId !== null);
+          if (e.type === "done") self.reaper.activity();
           if (e.type === "session_started") {
             const sid = (e as { sessionId: string }).sessionId;
             self.codexThreadId = sid;
@@ -211,7 +229,11 @@ export class CodexSession implements AgentSession {
   }
 
   public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
-    this.resumeGuard.assertCanStartRun(this.codexThreadId, this.id, "codex", "thread");
+    // Queued turns defer the guard to dispatch time (createRun re-asserts).
+    if (options?.queue !== true) {
+      this.resumeGuard.assertCanStartRun(this.codexThreadId, this.id, "codex", "thread");
+    }
+    this.reaper.activity();
     return this.inner.run(prompt, options);
   }
 
@@ -231,6 +253,7 @@ export class CodexSession implements AgentSession {
   }
 
   public async close(): Promise<void> {
+    this.reaper.stop();
     for (const f of this.stagedImages.splice(0)) {
       try {
         rmSync(f, { force: true });

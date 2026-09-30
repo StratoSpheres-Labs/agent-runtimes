@@ -400,6 +400,9 @@ import {
 
 - **Journal**（`src/core/run-journal.ts`）：每个事件追加到 `<storeDir>/<sessionId>.journal.ndjson`（`{seq, event}`，library session id 键）。崩溃恢复：`readJournal()` 重放，`journalIncomplete()` 报告没到 `done` 的 turn，`stampJournalAborted()` 打标（控制行，非事件）。8MB 压缩 + 30 天 retention。上层拿它做同步/审计/回放——和 wire 同样的 NDJSON 分帧。
 - **Logger**（`createSession({ logger })`，默认静默）：只记生命周期（spawn pid/exit、超时 kill、parser-guard、存盘/journal 警告）——不记 prompt、工具 I/O、argv、env。开发用 `consoleLogger()`，生产嵌自己的 sink。函数不过 JSON（`WireCreateSessionOptions` 排除 `logger`，和 `onPermissionRequest` 一样）。
+- **排队**（`run(prompt, { queue: true, signal? })`）：在活跃 turn 后面排队，前一轮 `done` 被观察到后按 FIFO 分发；abort 只在分发前退队，close 清掉队里所有。见 `docs/frontend.md` "Queue"。
+- **Reaper 与关机**（`createSession({ idleTimeoutMs })`）：空闲会话自关（活跃 turn 只会重 arm 不会被杀）；`shutdownAllSessions()` 一行关掉所有，供宿主 SIGTERM。
+- **Watchdog**（`run(prompt, { stallTimeoutMs })`）：活着但这么久没事件就判 STALL，报错 + cancel（终态 `done`）。和 `timeout`（总预算）是两回事。
 
 ---
 

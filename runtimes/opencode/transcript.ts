@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 // on node 20. The type import below is fully erased at runtime.
 import type { DatabaseSync } from "node:sqlite";
 import {
+  redactTranscriptEntries,
   selectHistory,
   toMs,
   truncateTranscriptText,
@@ -38,7 +39,10 @@ export async function readOpencodeTranscript(
   const db = openOpencodeDb(opencodeDbPath(options));
   if (!db) return [];
   try {
-    return selectHistory(readSession(db, options.sessionId), options);
+    return redactTranscriptEntries(
+      selectHistory(readSession(db, options.sessionId), options),
+      options.includeRawInputs,
+    );
   } finally {
     try {
       db.close();

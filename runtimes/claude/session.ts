@@ -30,6 +30,8 @@ import { readClaudeTranscript } from "./transcript.js";
 import { imageToBase64 } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
 import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
+import { IdleReaper } from "../../src/core/idle-reaper.js";
+import { trackSession } from "../../src/core/session-tracker.js";
 import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
@@ -60,6 +62,7 @@ export class ClaudeSession implements AgentSession {
   private mcpConfigFile: string | null = null;
   private readonly resumeGuard = new NativeIdResumeGuard();
   private readonly log: RuntimeLogger;
+  private readonly reaper: IdleReaper;
 
   public constructor(options: {
     id: string;
@@ -77,6 +80,7 @@ export class ClaudeSession implements AgentSession {
     resumeSessionId?: string;
     onPermissionRequest?: PermissionHandler;
     logger?: RuntimeLogger;
+    idleTimeoutMs?: number;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -93,6 +97,15 @@ export class ClaudeSession implements AgentSession {
     this.claudeSessionId = sanitizeResumeId(options.resumeSessionId, "claude") ?? null;
     this.onPermissionRequest = options.onPermissionRequest;
     this.log = options.logger ?? silentLogger;
+    this.reaper = new IdleReaper(
+      options.idleTimeoutMs,
+      () => !this.inner.hasActiveRun(),
+      () => this.close(),
+      this.log,
+    );
+    trackSession(this);
+    // Arm at birth: a session with no runs yet is already idle.
+    this.reaper.activity();
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
@@ -105,6 +118,9 @@ export class ClaudeSession implements AgentSession {
     // NOTE: no argv prompt 鈥?stream-json input reads stdin only.
     // MCP sessions pre-approve exactly their own servers' tools so headless
     // turns can call them (least privilege 鈥?no bypassPermissions).
+    // Re-asserted at dispatch (see OpencodeSession): queued turns start
+    // only on a drained predecessor.
+    this.resumeGuard.assertCanStartRun(this.claudeSessionId, this.id, "claude");
     this.resumeGuard.noteRunCreated();
     // No mid-run channel: print mode consumes only the initial stdin
     // prompt (verified live — follow-up envelopes are never processed).
@@ -161,6 +177,7 @@ export class ClaudeSession implements AgentSession {
       env: buildAgentEnv("claude", launch.env ?? process.env),
       stdinData: buildClaudeStdinPrompt(text, images.length > 0 ? images : undefined),
       timeout: runOpts.timeout,
+      stallTimeoutMs: runOpts.stallTimeoutMs,
       parser: new ClaudeParser(),
       keepStdinOpen: this.onPermissionRequest !== undefined,
       logger: this.log,
@@ -174,6 +191,7 @@ export class ClaudeSession implements AgentSession {
       return (async function* () {
         for await (const e of origEvents()) {
           self.resumeGuard.noteEvent(e.type, self.claudeSessionId !== null);
+          if (e.type === "done") self.reaper.activity();
           if (e.type === "session_started") {
             const sid = (e as { sessionId: string }).sessionId;
             self.claudeSessionId = sid;
@@ -245,7 +263,11 @@ export class ClaudeSession implements AgentSession {
   }
 
   public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
-    this.resumeGuard.assertCanStartRun(this.claudeSessionId, this.id, "claude");
+    // Queued turns defer the guard to dispatch time (createRun re-asserts).
+    if (options?.queue !== true) {
+      this.resumeGuard.assertCanStartRun(this.claudeSessionId, this.id, "claude");
+    }
+    this.reaper.activity();
     return this.inner.run(prompt, options);
   }
 
@@ -265,6 +287,7 @@ export class ClaudeSession implements AgentSession {
   }
 
   public async close(): Promise<void> {
+    this.reaper.stop();
     if (this.mcpConfigFile) {
       try {
         rmSync(this.mcpConfigFile, { force: true });

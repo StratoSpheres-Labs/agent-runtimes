@@ -267,6 +267,7 @@ export class OpencodeRuntime extends DefaultRuntime {
       workspace,
       resumeSessionId,
       logger,
+      idleTimeoutMs,
     } = options ?? {};
     // Reject inputs this CLI cannot honor before anything spawns (never
     // silently ignore): opencode has no workspace/permission channel, no
@@ -311,6 +312,7 @@ export class OpencodeRuntime extends DefaultRuntime {
       // Selects the 1.x vs 2.x flag set per run (undefined = legacy 1.x).
       cliVersion: status.installed ? (status.version ?? undefined) : undefined,
       logger,
+      idleTimeoutMs,
     });
   }
 

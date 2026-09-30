@@ -109,6 +109,13 @@ export interface CreateSessionOptions {
   /** Phase 27: resume a durable native session (capture-style). */
   resumeSessionId?: string;
   /**
+   * Close the session after this many ms without activity (run start,
+   * turn end, queued demand). Undefined/non-positive disables. Long turns
+   * in flight re-arm instead of killing active work. Plain data — safe
+   * for `WireCreateSessionOptions`.
+   */
+  idleTimeoutMs?: number;
+  /**
    * Diagnostics sink (default silent). Forwarded to the session, its runs,
    * and transports — the embedding app's observability hook. Functions
    * never cross the JSON wire (excluded from `WireCreateSessionOptions`).

@@ -19,6 +19,8 @@ import type { WorkspaceOptions } from "../../src/definition/workspace.js";
 import { stageImageToTempFile, stagedIsTemp } from "../../src/definition/image.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
 import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
+import { IdleReaper } from "../../src/core/idle-reaper.js";
+import { trackSession } from "../../src/core/session-tracker.js";
 import { NativeIdResumeGuard } from "../../src/core/resume-guard.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
@@ -46,6 +48,7 @@ export class OpencodeSession implements AgentSession {
   /** Raw detected CLI version — selects the 1.x vs 2.x flag set per run. */
   private readonly cliVersion: string | undefined;
   private readonly log: RuntimeLogger;
+  private readonly reaper: IdleReaper;
 
   public constructor(options: {
     id: string;
@@ -59,6 +62,7 @@ export class OpencodeSession implements AgentSession {
     resumeSessionId?: string;
     cliVersion?: string;
     logger?: RuntimeLogger;
+    idleTimeoutMs?: number;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -70,7 +74,16 @@ export class OpencodeSession implements AgentSession {
     this.workspace = options.workspace;
     this.cliVersion = options.cliVersion;
     this.log = options.logger ?? silentLogger;
+    this.reaper = new IdleReaper(
+      options.idleTimeoutMs,
+      () => !this.inner.hasActiveRun(),
+      () => this.close(),
+      this.log,
+    );
     this.opencodeSessionId = sanitizeResumeId(options.resumeSessionId, "opencode") ?? null;
+    trackSession(this);
+    // Arm at birth: a session with no runs yet is already idle.
+    this.reaper.activity();
     this.inner = new DefaultSession({
       id: options.id,
       cwd: options.cwd,
@@ -80,6 +93,10 @@ export class OpencodeSession implements AgentSession {
   }
 
   private createRun(runId: string, prompt: PromptContent, runOpts: SessionRunOptions): AgentRun {
+    // Re-asserted at dispatch: a queued turn starts only on a drained
+    // predecessor, so an undrained one rejects its waiter loudly here
+    // instead of silently opening a fresh upstream session.
+    this.resumeGuard.assertCanStartRun(this.opencodeSessionId, this.id, "opencode");
     this.resumeGuard.noteRunCreated();
     // No mid-run channel: stdin carries one prompt per process.
     if (runOpts.allowMidRunInput === true) {
@@ -148,6 +165,7 @@ export class OpencodeSession implements AgentSession {
       stdinData: text,
       env: Object.keys(env).length > 0 ? env : undefined,
       timeout: runOpts.timeout,
+      stallTimeoutMs: runOpts.stallTimeoutMs,
       parser: new OpencodeParser(),
       logger: this.log,
       journalSessionId: this.id,
@@ -160,6 +178,7 @@ export class OpencodeSession implements AgentSession {
       return (async function* () {
         for await (const e of origEvents()) {
           self.resumeGuard.noteEvent(e.type, self.opencodeSessionId !== null);
+          if (e.type === "done") self.reaper.activity();
           if (e.type === "session_started") {
             const sid = (e as { sessionId: string }).sessionId;
             self.opencodeSessionId = sid;
@@ -189,7 +208,12 @@ export class OpencodeSession implements AgentSession {
   }
 
   public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
-    this.resumeGuard.assertCanStartRun(this.opencodeSessionId, this.id, "opencode");
+    // Queued turns defer the guard to dispatch time (createRun re-asserts):
+    // at enqueue the previous run is still alive by definition.
+    if (options?.queue !== true) {
+      this.resumeGuard.assertCanStartRun(this.opencodeSessionId, this.id, "opencode");
+    }
+    this.reaper.activity();
     return this.inner.run(prompt, options);
   }
 
@@ -210,6 +234,7 @@ export class OpencodeSession implements AgentSession {
   }
 
   public async close(): Promise<void> {
+    this.reaper.stop();
     for (const f of this.stagedImages.splice(0)) {
       try {
         rmSync(f, { force: true });

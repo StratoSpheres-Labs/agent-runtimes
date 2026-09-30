@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  redactTranscriptEntries,
   selectHistory,
   toMs,
   truncateTranscriptText,
@@ -36,7 +37,10 @@ export function readClaudeTranscript(options: ClaudeTranscriptOptions): Transcri
   } catch {
     return [];
   }
-  return selectHistory(parseClaudeTranscript(text), options);
+  return redactTranscriptEntries(
+    selectHistory(parseClaudeTranscript(text), options),
+    options.includeRawInputs,
+  );
 }
 
 /**

@@ -50,6 +50,13 @@ export interface AcpRunOptions {
    * Sessions pass their own id; omit to disable journaling for the run.
    */
   journalSessionId?: string;
+  /**
+   * Stall watchdog: fire when no `session/update` arrives for this many
+   * ms. Emits `error{code:"STALL"}` and cancels the turn (terminal `done`
+   * follows). Undefined/non-positive disables. Mirrors `DefaultRun`
+   * semantics (see `RunOptions.stallTimeoutMs`).
+   */
+  stallTimeoutMs?: number;
 }
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
@@ -78,6 +85,9 @@ export class AcpRun implements AgentRun {
   private readonly timeoutMs: number;
   private readonly log: RuntimeLogger;
   private readonly journalSessionId: string | undefined;
+  private readonly stallTimeoutMs: number | undefined;
+  private stallTimer: NodeJS.Timeout | null = null;
+  private stallFired = false;
   private readonly stream = new EventStream();
   private sessionId: string | null = null;
   private finished = false;
@@ -100,6 +110,7 @@ export class AcpRun implements AgentRun {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
     this.log = options.logger ?? silentLogger;
     this.journalSessionId = options.journalSessionId;
+    this.stallTimeoutMs = options.stallTimeoutMs;
     this.completion = new Promise<ProcessExit>((resolve) => {
       this.completionResolve = resolve;
     });
@@ -129,6 +140,47 @@ export class AcpRun implements AgentRun {
       appendJournalEvent(this.journalSessionId, event, { logger: this.log });
     }
     this.stream.push(event);
+    if (event.type === "done") {
+      this.clearStall();
+    } else {
+      this.armStall();
+    }
+  }
+
+  /**
+   * Stall watchdog: any `session/update` counts as progress. Firing emits
+   * one `STALL` error and cancels the turn (terminal `done` follows via
+   * the cancel path). Mirrors `DefaultRun` (fire-once, unref'd, guarded
+   * past completion).
+   */
+  private armStall(): void {
+    const ms = this.stallTimeoutMs;
+    if (ms === undefined || ms <= 0) return;
+    this.clearStall();
+    this.stallTimer = setTimeout(() => {
+      this.stallTimer = null;
+      if (this.finished || this.stallFired) return;
+      this.stallFired = true;
+      this.log.warn("stall", { runId: this.id, stallTimeoutMs: ms });
+      this.push({
+        type: "error",
+        error: {
+          code: "STALL",
+          message: `No updates for ${String(ms)}ms — treating the turn as stalled`,
+        },
+      });
+      void this.cancel().catch(() => {
+        // cancel() funnels through the guarded paths; nothing more to do.
+      });
+    }, ms);
+    this.stallTimer.unref();
+  }
+
+  private clearStall(): void {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = null;
+    }
   }
 
   /**
@@ -315,6 +367,7 @@ export class AcpRun implements AgentRun {
 
   public async close(): Promise<void> {
     this.transport.setAgentRequestHandler(null);
+    this.clearStall();
     // Turn-over for the session gate (mirrors DefaultRun: the gate opens
     // on completion, not on transport teardown).
     this._done = true;

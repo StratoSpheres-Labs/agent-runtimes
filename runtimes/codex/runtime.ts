@@ -85,6 +85,7 @@ export class CodexRuntime extends DefaultRuntime {
       workspace,
       resumeSessionId,
       logger,
+      idleTimeoutMs,
     } = options ?? {};
     // Reject inputs this CLI cannot honor before anything spawns: codex
     // has no agent / system-prompt / token-budget / cost-budget / allowlist
@@ -171,6 +172,7 @@ export class CodexRuntime extends DefaultRuntime {
       workspace,
       resumeSessionId,
       logger,
+      idleTimeoutMs,
     });
   }
 

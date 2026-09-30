@@ -55,15 +55,24 @@ event (never host crash); `TIMEOUT` identity preserved stdio+ACP;
 stdin-EPIPE → event (never unhandled rejection); ACP circular results →
 `-32601`/`-32603` answers; argv sanitizers (model/config/tool/resume ids);
 image byte caps + staging containment; version floors + `tested` tables +
-fail-open doctor; 13-code error taxonomy (switch, never string-match);
+fail-open doctor; 14-code error taxonomy (switch, never string-match);
 injected `RuntimeLogger` (silent default) across lifecycle/transports/runs;
-run journal write path (NDJSON, torn-tail tolerant, 8MB compact, 30d retain).
+run journal write path (NDJSON, torn-tail tolerant, 8MB compact, 30d retain);
+history desensitized by default (`redactSecrets` over vendor-key/k=v/bearer
+shapes, explicit `redacted` flag, `includeRawInputs` opt-out);
+per-session run queue (`queue:true` FIFO on observed `done`, abort signal,
+poison-skip, close-flush; prompts in-memory only);
+stall watchdog (`stallTimeoutMs` per run, `STALL` + cancel, stdio + ACP);
+idle reaper (`idleTimeoutMs` per session, busy re-arms) + host-wide
+`shutdownAllSessions()` (weak-tracked, per-session errors isolated).
 
 Partial:
 
 - Journal replay not wired into sessions (write + read + detect + stamp
-  ship; `replayJournalEvents` awaits session integration — queued behind
-  the run queue).
+  ship; `replayJournalEvents` awaits session integration).
+- Per-session run queue ships in-memory: FIFO dispatch on observed `done`,
+  abort-before-dispatch via signal, poison entries skip through, close
+  flushes. Queued prompts are never journaled.
 - opencode-2.x reasoning without catalog evidence omits and runs base
   silently (fail-open by design, but the downgrade itself is invisible —
   a future `reasoning_downgraded` note is the honest shape).
@@ -74,15 +83,6 @@ Partial:
 
 Each carries why + reopen condition. No reason, no entry.
 
-- **Stall watchdog** — why: timeout covers total duration; a live-but-silent
-  agent has no signal yet. Reopen: first real stuck-turn report or soak evidence.
-- **Idle reaper + registry `shutdown()`** — why: BFF lifecycle tooling,
-  sized with the upper project, not this layer alone. Reopen: upper project
-  requests it (spec: per-session `idleTimeoutMs` + one-line host shutdown).
-- **History redaction** — why: `TranscriptEntry.redacted` + default-desensitized
-  folding is designed, unscheduled. Reopen: first enterprise audit asks.
-- **Per-session run queue** — why: `queue: true` FIFO on the journal is
-  designed, unscheduled. Reopen: upper project needs multi-prompt UX.
 - **Soak evidence** — why: bursts verified, multi-hour runs not. Reopen:
   before any durability SLA claim.
 - **CJS dual build** — why: ESM-only is fine on Node ≥ 20; CJS compat costs a

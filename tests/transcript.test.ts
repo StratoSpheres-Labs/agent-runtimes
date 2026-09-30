@@ -11,6 +11,8 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  redactSecrets,
+  redactTranscriptEntries,
   selectHistory,
   toMs,
   truncateTranscriptText,
@@ -47,6 +49,45 @@ describe("transcript helpers", () => {
     expect(selectHistory(entries, { since: 150 }).map((e) => e.text)).toEqual(["b"]);
     expect(selectHistory(entries, { limit: 2 }).map((e) => e.text)).toEqual(["b", "c"]);
     expect(selectHistory(entries)).toHaveLength(3);
+  });
+});
+
+describe("redactSecrets", () => {
+  it("masks vendor key shapes", () => {
+    expect(redactSecrets("key sk-ant-abc123XYZ-_9 is here")).toBe("key [redacted] is here");
+    expect(redactSecrets("proj sk-proj-0123456789abcdef end")).toBe("proj [redacted] end");
+    expect(redactSecrets("id AKIAIOSFODNN7EXAMPLE ok")).toBe("id [redacted] ok");
+    expect(redactSecrets("tok xoxb-1234-abcd-xyz now")).toBe("tok [redacted] now");
+    expect(redactSecrets("ci ghp_abcdefghijklmnop done")).toBe("ci [redacted] done");
+    expect(redactSecrets("openai gsk_abcdefghijklmnopqr go")).toBe("openai [redacted] go");
+  });
+
+  it("masks k=v secret nouns and bearer tokens", () => {
+    expect(redactSecrets("api_key=hunter2 rest")).toBe("[redacted] rest");
+    expect(redactSecrets("password: hunter2")).toBe("[redacted]");
+    expect(redactSecrets("Authorization: Bearer abcdefghijklmnopqr")).toBe(
+      "Authorization: [redacted]",
+    );
+  });
+
+  it("leaves ordinary prose alone", () => {
+    expect(redactSecrets("check the token budget first")).toBe("check the token budget first");
+    expect(redactSecrets("no secrets here, just text")).toBe("no secrets here, just text");
+    expect(redactSecrets("")).toBe("");
+  });
+});
+
+describe("redactTranscriptEntries", () => {
+  const entries: TranscriptEntry[] = [{ role: "user", text: "api_key=hunter2 hi" }];
+  it("masks by default and marks redacted", () => {
+    expect(redactTranscriptEntries(entries)).toEqual([
+      { role: "user", text: "[redacted] hi", redacted: true },
+    ]);
+  });
+  it("passes through raw only on explicit opt-in", () => {
+    expect(redactTranscriptEntries(entries, true)).toEqual([
+      { role: "user", text: "api_key=hunter2 hi", redacted: false },
+    ]);
   });
 });
 
@@ -162,7 +203,7 @@ describe("parseCodexRollout", () => {
       writeFileSync(join(day, "rollout-2026-09-04T09-57-39-thr_test.jsonl"), rollout);
       const entries = readCodexTranscript({ sessionId: "thr_test", codexHome: base, limit: 1 });
       expect(entries).toEqual([
-        { role: "assistant", text: "done: a.txt", timestamp: 1789000004000 },
+        { role: "assistant", text: "done: a.txt", timestamp: 1789000004000, redacted: true },
       ]);
       expect(readCodexTranscript({ sessionId: "thr_missing", codexHome: base })).toEqual([]);
     } finally {
@@ -182,6 +223,33 @@ describe("findClaudeTranscript", () => {
       expect(
         findClaudeTranscript({ sessionId: "6fd6faeb-a5da-48c2-ab2d-7691045af24b", homeDir: home }),
       ).toBeNull();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readClaudeTranscript redaction", () => {
+  it("masks secrets by default, raw only on explicit opt-in", () => {
+    const home = mkdtempSync(join(tmpdir(), "claude-redact-"));
+    try {
+      // Scan path: <home>/.claude/projects/<slug>/<sessionId>.jsonl
+      // (the finder only descends into subdirectories).
+      const dir = join(home, ".claude", "projects", "test");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "sid9.jsonl"),
+        `${JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "deploy with api_key=hunter2 now" },
+        })}\n`,
+      );
+      expect(readClaudeTranscript({ sessionId: "sid9", homeDir: home })).toEqual([
+        { role: "user", text: "deploy with [redacted] now", redacted: true },
+      ]);
+      expect(
+        readClaudeTranscript({ sessionId: "sid9", homeDir: home, includeRawInputs: true }),
+      ).toEqual([{ role: "user", text: "deploy with api_key=hunter2 now", redacted: false }]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -284,8 +352,14 @@ describe("readOpencodeTranscript", () => {
       // carry {type:"text"|"tool"|"reasoning", text/tool/state}; step
       // markers, pending tools, and reasoning never surface.
       expect(await readOpencodeTranscript({ sessionId: "ses_test", dataDir: base })).toEqual([
-        { role: "user", text: "hello db", timestamp: 1789641894000 },
-        { role: "tool", toolName: "bash", text: "bash: ok", timestamp: 1789641895000 },
+        { role: "user", text: "hello db", timestamp: 1789641894000, redacted: true },
+        {
+          role: "tool",
+          toolName: "bash",
+          text: "bash: ok",
+          timestamp: 1789641895000,
+          redacted: true,
+        },
       ]);
       expect(await readOpencodeTranscript({ sessionId: "ses_missing", dataDir: base })).toEqual([]);
     } finally {

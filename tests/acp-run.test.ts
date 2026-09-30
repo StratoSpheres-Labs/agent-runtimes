@@ -145,6 +145,30 @@ describe("AcpRun", () => {
     await run.close();
   }, 15000);
 
+  it("fires STALL on a silent turn and still ends with done", async () => {
+    // Hang mock never answers session/prompt; the watchdog (not the 120s
+    // turn timeout) must end it: exactly one STALL, then done, and
+    // result() resolves non-zero like any other turn failure.
+    const run = new AcpRun("test:stall", {
+      transport: mockTransport("hang"),
+      cwd: process.cwd(),
+      stallTimeoutMs: 300,
+    });
+    await run.start("hi");
+    const codes: string[] = [];
+    const types: string[] = [];
+    for await (const e of run.events()) {
+      types.push(e.type);
+      if (e.type === "error") codes.push(e.error.code);
+      if (e.type === "done") break;
+    }
+    expect(codes.filter((c) => c === "STALL")).toHaveLength(1);
+    expect(types[types.length - 1]).toBe("done");
+    // Cancelled by the watchdog (not failed): null exit, reason in the event.
+    await expect(run.result()).resolves.toEqual({ code: null, signal: null });
+    await run.close();
+  }, 15000);
+
   it("emits session_started with the native id", async () => {
     const run = new AcpRun("test:sid", { transport: mockTransport("turn"), cwd: process.cwd() });
     try {

@@ -90,9 +90,11 @@ only); missing stores, schema drift, and old node (opencode needs
 `node:sqlite`, i.e. node ≥ 22.5) all fail open to `[]`.
 
 > Privacy: transcripts may contain user-pasted secrets or credentials
-> echoed in tool output. Never log `history()` results, never forward them
-> to another model or service without explicit user consent, and prefer
-> `limit`/`since` over full dumps.
+> echoed in tool output. Entries arrive desensitized by default
+> (`redacted: true`, credential shapes masked — pass `includeRawInputs`
+> only for trusted first-party use). Never log `history()` results, never
+> forward them to another model or service without explicit user consent,
+> and prefer `limit`/`since` over full dumps.
 
 ## Steering: `run.send()` via `WireSendInput`
 
@@ -176,6 +178,18 @@ drain to `done` first, or open a fresh session on purpose. The only
 exception is a run drained to `done` with no id in it (the CLI died
 before minting one): a fresh start is provably safe there and allowed.
 
+## Queue: `run(prompt, { queue: true })` waits instead of rejecting
+
+Fire `run()` calls back-to-back without babysitting drains: queued turns
+dispatch FIFO once the previous turn's `done` is observed. Same drain
+requirement as above — queue decouples _issue_ time from _drain_ time, it
+does not eliminate draining (drain directly or run one background pump
+over all runs). Details: aborted `signal` dequeues before dispatch (never
+cancels a live turn — use `cancel()` for that); `cancel()` keeps the
+queue, `close()` rejects everything still queued; queued prompts live in
+memory only (a host crash drops the queue, completed turns survive in the
+run journal).
+
 ## Error codes: machine-readable, never string-match
 
 Every `error` event carries `error.code` — switch on it, never on
@@ -184,6 +198,7 @@ Every `error` event carries `error.code` — switch on it, never on
 | code                       | meaning                                                                                    |
 | -------------------------- | ------------------------------------------------------------------------------------------ |
 | `TIMEOUT`                  | turn exceeded its timeout (stdio runs and ACP turns agree)                                 |
+| `STALL`                    | no event for `stallTimeoutMs` (live but silent agent); turn cancelled, `done` follows      |
 | `NON_ZERO_EXIT`            | child died with a non-zero code, no turn `done` seen                                       |
 | `PROCESS_ERROR`            | spawn failure or other process-level fault (not a timeout)                                 |
 | `TURN_FAILED`              | ACP prompt round-trip failed (not a timeout)                                               |

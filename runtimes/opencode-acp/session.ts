@@ -16,6 +16,8 @@ import type { HistoryOptions, TranscriptEntry } from "../../src/definition/trans
 import { readOpencodeTranscript } from "../opencode/transcript.js";
 import { saveSessionRecord } from "../../src/core/session-store.js";
 import { silentLogger, type RuntimeLogger } from "../../src/definition/logger.js";
+import { IdleReaper } from "../../src/core/idle-reaper.js";
+import { trackSession } from "../../src/core/session-tracker.js";
 import { sanitizeResumeId } from "../../src/definition/session-inputs.js";
 import { buildAgentEnv } from "../../src/discovery/env.js";
 import { resolveLaunch } from "../../src/discovery/launch.js";
@@ -41,6 +43,7 @@ export class OpencodeAcpSession implements AgentSession {
   private readonly workspace: WorkspaceOptions | undefined;
   private readonly onPermissionRequest: PermissionHandler | undefined;
   private readonly log: RuntimeLogger;
+  private readonly reaper: IdleReaper;
 
   public constructor(options: {
     id: string;
@@ -52,6 +55,7 @@ export class OpencodeAcpSession implements AgentSession {
     onPermissionRequest?: PermissionHandler;
     resumeSessionId?: string;
     logger?: RuntimeLogger;
+    idleTimeoutMs?: number;
   }) {
     this.id = options.id;
     this.command = options.command;
@@ -62,6 +66,15 @@ export class OpencodeAcpSession implements AgentSession {
     this.onPermissionRequest = options.onPermissionRequest;
     this.acpSessionId = sanitizeResumeId(options.resumeSessionId, "opencode-acp") ?? null;
     this.log = options.logger ?? silentLogger;
+    this.reaper = new IdleReaper(
+      options.idleTimeoutMs,
+      () => !this.inner.hasActiveRun(),
+      () => this.close(),
+      this.log,
+    );
+    trackSession(this);
+    // Arm at birth: a session with no runs yet is already idle.
+    this.reaper.activity();
     // NOTE: no reasoning passthrough 鈥?capabilities.reasoning is false
     // (no control channel wired); CreateSessionOptions.reasoning is
     // intentionally not forwarded.
@@ -116,6 +129,7 @@ export class OpencodeAcpSession implements AgentSession {
       onPermissionRequest: this.onPermissionRequest,
       images: [...partImages, ...(runOpts.images ?? [])],
       timeoutMs: runOpts.timeout,
+      stallTimeoutMs: runOpts.stallTimeoutMs,
       resumeSessionId: this.acpSessionId ?? undefined,
       logger: this.log,
       journalSessionId: this.id,
@@ -146,6 +160,7 @@ export class OpencodeAcpSession implements AgentSession {
   }
 
   public async run(prompt: PromptContent, options?: SessionRunOptions): Promise<AgentRun> {
+    this.reaper.activity();
     return this.inner.run(prompt, options);
   }
 
@@ -166,6 +181,7 @@ export class OpencodeAcpSession implements AgentSession {
   }
 
   public async close(): Promise<void> {
+    this.reaper.stop();
     return this.inner.close();
   }
 

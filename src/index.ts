@@ -43,6 +43,8 @@ export type { ImageInput } from "./definition/image.js";
 export {
   truncateTranscriptText,
   selectHistory,
+  redactSecrets,
+  redactTranscriptEntries,
   toMs,
   MAX_TRANSCRIPT_TEXT,
 } from "./definition/transcript.js";
@@ -103,10 +105,12 @@ export {
 export type { ProcessExit, ProcessState, SpawnOptions } from "./core/lifecycle.js";
 export { RuntimeProcess } from "./core/lifecycle.js";
 export type { AgentRun, RunOptions } from "./core/run.js";
-export type { SessionRunOptions } from "./core/session.js";
+export type { SessionRunOptions, QueueAbortSignal } from "./core/session.js";
 export { DefaultRun } from "./core/run.js";
 export { DefaultSession } from "./core/session.js";
 export { NativeIdResumeGuard } from "./core/resume-guard.js";
+export { IdleReaper } from "./core/idle-reaper.js";
+export { trackSession, shutdownAllSessions } from "./core/session-tracker.js";
 
 // Events
 export type {

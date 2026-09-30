@@ -407,6 +407,9 @@ import {
 
 - **Journal** (`src/core/run-journal.ts`): every emitted event appends to `<storeDir>/<sessionId>.journal.ndjson` (`{seq, event}`), keyed by library session id. Crash recovery: `readJournal()` replays, `journalIncomplete()` reports a turn that never reached `done`, `stampJournalAborted()` marks it (control line, never a `RuntimeEvent`). 8MB compaction + 30-day retention. Upper layers tail these files for sync/audit/replay — same NDJSON framing as the wire.
 - **Logger** (`createSession({ logger })`, default silent): lifecycle notes (spawn pid/exit, timeout kills, parser-guard hits, save/journal warnings) — never prompts, tool I/O, argv, or env. `consoleLogger()` exists for development; production embeds a structured sink. Functions never cross JSON (`WireCreateSessionOptions` omits `logger` like `onPermissionRequest`).
+- **Queue** (`run(prompt, { queue: true, signal? })`): park behind the active run, FIFO dispatch on observed `done`; abort dequeues pre-dispatch, close flushes. See `docs/frontend.md` "Queue".
+- **Reaper & shutdown** (`createSession({ idleTimeoutMs })`): idle sessions self-close (busy turns re-arm); `shutdownAllSessions()` closes everything tracked for host SIGTERM handlers.
+- **Watchdog** (`run(prompt, { stallTimeoutMs })`): no event for that long on a live turn emits `STALL` and cancels (terminal `done`). Distinct from `timeout` (total budget).
 
 ---
 

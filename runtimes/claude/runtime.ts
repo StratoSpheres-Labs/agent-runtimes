@@ -139,6 +139,7 @@ export class ClaudeRuntime extends DefaultRuntime {
       resumeSessionId,
       onPermissionRequest,
       logger,
+      idleTimeoutMs,
     } = options ?? {};
     // Reject inputs this CLI cannot honor before anything spawns: claude
     // has no token-budget / profile channels and no sandbox flag
@@ -197,6 +198,7 @@ export class ClaudeRuntime extends DefaultRuntime {
       resumeSessionId,
       onPermissionRequest,
       logger,
+      idleTimeoutMs,
     });
   }
 
