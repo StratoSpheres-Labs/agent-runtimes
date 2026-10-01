@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   doctor,
   doctorExitCode,
@@ -8,7 +10,8 @@ import {
   type DoctorReason,
   type DoctorReport,
 } from "../src/doctor.js";
-import { main } from "../src/cli.js";
+import { SELF_PACKAGE, formatUpdateHint, main } from "../src/cli.js";
+import { clearLatestCache } from "../src/discovery/updates.js";
 import { RuntimeNotFoundError } from "../src/core/errors.js";
 import type {
   AgentRuntime,
@@ -51,6 +54,25 @@ describe("formatReport / doctorExitCode", () => {
     expect(out).toContain("⚠");
     expect(out).toContain("✗");
     expect(out).toContain("/usr/local/bin/opencode");
+  });
+
+  it("paints the agent name in brand color when asked, plain otherwise", () => {
+    const claude = { id: "claude", name: "Claude Code", checks: [] };
+    expect(formatReport(claude, { color: true })).toContain(
+      "\x1b[38;2;217;119;87mClaude Code\x1b[0m",
+    );
+    expect(formatReport(claude, { color: false })).toContain("Claude Code");
+    expect(formatReport(claude, { color: false })).not.toContain("\x1b[");
+    // opencode-acp shares the opencode gray; unknown ids stay plain.
+    const acp = { id: "opencode-acp", name: "OpenCode (ACP)", checks: [] };
+    expect(formatReport(acp, { color: true })).toContain(
+      "\x1b[38;2;128;128;128mOpenCode (ACP)\x1b[0m",
+    );
+    const codex = { id: "codex", name: "Codex", checks: [] };
+    expect(formatReport(codex, { color: true })).toContain("\x1b[38;2;55;96;223mCodex\x1b[0m");
+    const unknown = { id: "stub", name: "Stub", checks: [] };
+    expect(formatReport(unknown, { color: true })).toContain("Stub");
+    expect(formatReport(unknown, { color: true })).not.toContain("\x1b[");
   });
 
   it("exits nonzero only for run-blocking failures", () => {
@@ -171,8 +193,8 @@ describe("cli main()", () => {
       list: (): string[] => ["a", "b"],
       resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
     };
-    await expect(main(["-d"], registry)).resolves.toBe(0);
-    await expect(main(["--doctor"], registry)).resolves.toBe(0);
+    await expect(main(["-d"], registry, { skipSelfUpdate: true })).resolves.toBe(0);
+    await expect(main(["--doctor"], registry, { skipSelfUpdate: true })).resolves.toBe(0);
     // Two full reports, one per listed id.
     expect(log.mock.calls.join("\n").split("Agent Runtime Doctor").length - 1).toBe(4);
   });
@@ -186,7 +208,7 @@ describe("cli main()", () => {
           ? Promise.reject(new Error("no such runtime"))
           : Promise.resolve(healthyStub()),
     };
-    await expect(main(["-d"], registry)).resolves.toBe(1);
+    await expect(main(["-d"], registry, { skipSelfUpdate: true })).resolves.toBe(1);
     const out = log.mock.calls.join("\n");
     expect(out).toContain("### broken: error: no such runtime");
     // The healthy one still got its full report (one title, not two).
@@ -199,7 +221,7 @@ describe("cli main()", () => {
       list: (): string[] => ["a", "b"],
       resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
     };
-    await expect(main(["doctor"], registry)).resolves.toBe(0);
+    await expect(main(["doctor"], registry, { skipSelfUpdate: true })).resolves.toBe(0);
     expect(log.mock.calls.join("\n").split("Agent Runtime Doctor").length - 1).toBe(2);
   });
 
@@ -252,6 +274,95 @@ describe("cli main()", () => {
     expect(parsed.find((r) => r.id === "broken")?.error).toBe("no such runtime");
   });
 
+  it("formats per-manager upgrade lines (commands only where unambiguous)", () => {
+    const base = { installed: "1.0.0", latest: "2.0.0", package: "scope/tool" };
+    expect(formatUpdateHint({ id: "stub", updates: [{ ...base, manager: "npm" }] })).toBe(
+      "↻ update: stub 1.0.0 → 2.0.0 — run: npm i -g scope/tool",
+    );
+    expect(formatUpdateHint({ id: "stub", updates: [{ ...base, manager: "pnpm" }] })).toBe(
+      "↻ update: stub 1.0.0 → 2.0.0 — run: pnpm add -g scope/tool",
+    );
+    expect(formatUpdateHint({ id: "stub", updates: [{ ...base, manager: "bun" }] })).toBe(
+      "↻ update: stub 1.0.0 → 2.0.0 — run: bun add -g scope/tool",
+    );
+    // Managers without a verifiable global-add spelling get a version nudge, never a guess.
+    expect(formatUpdateHint({ id: "stub", updates: [{ ...base, manager: "winget" }] })).toBe(
+      "↻ update: stub 1.0.0 → 2.0.0 available (winget-managed — upgrade it the way you installed it)",
+    );
+    expect(formatUpdateHint({ id: "stub", updates: [{ ...base, manager: "brew" }] })).toBe(
+      "↻ update: stub 1.0.0 → 2.0.0 available (brew-managed — upgrade it the way you installed it)",
+    );
+    expect(formatUpdateHint({ id: "stub" })).toBeNull();
+    expect(formatUpdateHint({ id: "stub", updates: [] })).toBeNull();
+  });
+
+  it("self package constant matches package.json", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { name: string };
+    expect(SELF_PACKAGE).toBe(pkg.name);
+  });
+
+  it("prints the self hint on stderr when the stub registry is ahead", async () => {
+    clearLatestCache();
+    const { server, url } = await stubRegistry({
+      "/%40stratosphereslab/agent-runtimes/latest": { version: "9.9.9" },
+    });
+    try {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const registry = {
+        list: (): string[] => ["a"],
+        resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+      };
+      await expect(main(["doctor", "a"], registry, { updateRegistry: url })).resolves.toBe(0);
+      expect(err.mock.calls.join("\n")).toContain("↻ update: agent-runtimes");
+      expect(err.mock.calls.join("\n")).toContain("npm i -g @stratosphereslab/agent-runtimes");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("stays silent when the stub registry matches the package version", async () => {
+    clearLatestCache();
+    const pkg = JSON.parse(readFileSync("package.json", "utf-8")) as { version: string };
+    const { server, url } = await stubRegistry({
+      "/%40stratosphereslab/agent-runtimes/latest": { version: pkg.version },
+    });
+    try {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const registry = {
+        list: (): string[] => ["a"],
+        resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+      };
+      await expect(main(["doctor", "a"], registry, { updateRegistry: url })).resolves.toBe(0);
+      expect(err.mock.calls).toHaveLength(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("--json never carries hint lines on stderr", async () => {
+    clearLatestCache();
+    const { server, url } = await stubRegistry({
+      "/%40stratosphereslab/agent-runtimes/latest": { version: "9.9.9" },
+    });
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const registry = {
+        list: (): string[] => ["a"],
+        resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(healthyStub()),
+      };
+      await expect(
+        main(["doctor", "a", "--json"], registry, { updateRegistry: url }),
+      ).resolves.toBe(0);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ id: "stub" });
+      expect(err.mock.calls).toHaveLength(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("bare -d reports an uninstalled runtime inline (not a crash)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const rt = healthyStub();
@@ -260,7 +371,7 @@ describe("cli main()", () => {
       list: (): string[] => ["gone"],
       resolve: (_id: string): Promise<AgentRuntime> => Promise.resolve(rt),
     };
-    await expect(main(["-d"], registry)).resolves.toBe(1);
+    await expect(main(["-d"], registry, { skipSelfUpdate: true })).resolves.toBe(1);
     expect(log.mock.calls.join("\n")).toContain("Stub");
   });
 
@@ -524,3 +635,36 @@ describe("doctor() reason codes (stub runtimes, no CLI)", () => {
     ).toBeUndefined();
   });
 });
+
+// --- hermetic registry stub (node:http, localhost only; mirrors updates.test.ts) ---
+
+async function stubRegistry(
+  routes: Record<string, unknown>,
+): Promise<{ server: Server; url: string }> {
+  const server = createServer((req, res) => {
+    const body = routes[req.url ?? ""];
+    if (body === undefined) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.setHeader("content-type", "application/json").end(JSON.stringify(body));
+  });
+  return { server, url: await listen(server) };
+}
+
+function listen(server: Server): Promise<string> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as AddressInfo;
+      resolve(`http://127.0.0.1:${String(addr.port)}`);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+}

@@ -149,6 +149,24 @@ describe("doctor Version row update suffix", () => {
     expect(row?.detail).toMatch(/^1\.0\.0 → \d+\.\d+\.\d+$/);
   }, 60000);
 
+  it("attaches structured update facts to the report (same fetch, no second hit)", async () => {
+    clearLatestCache();
+    const latest = await fetchLatestVersion("@anthropic-ai/claude-code");
+    if (!latest) return; // offline
+    const rt = stubRuntime();
+    const base = rt.info();
+    rt.info = () => ({ ...base, registryId: "@anthropic-ai/claude-code" });
+    const report = await doctor("stub", fakeRegistry(rt));
+    expect(report.updates).toEqual([
+      {
+        installed: "0.0.1",
+        latest,
+        manager: "npm",
+        package: "@anthropic-ai/claude-code",
+      },
+    ]);
+  }, 60000);
+
   it("keeps untested-version precedence with the suffix attached", async () => {
     clearLatestCache();
     const latest = await fetchLatestVersion("@anthropic-ai/claude-code");

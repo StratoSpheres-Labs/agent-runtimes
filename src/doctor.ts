@@ -12,7 +12,7 @@ function shortVersion(raw: string): string {
   return parsed ? `${String(parsed.major)}.${String(parsed.minor)}.${String(parsed.patch)}` : raw;
 }
 import { agentSearchDirs } from "./discovery/executable.js";
-import type { InstalledCopy } from "./discovery/installs.js";
+import type { InstalledCopy, InstallManager } from "./discovery/installs.js";
 import { fetchLatestVersion, updateAvailable } from "./discovery/updates.js";
 import { ADVISORY_PROBE_FLAGS } from "./discovery/capabilities.js";
 
@@ -85,6 +85,26 @@ export interface DoctorReport {
   id: string;
   name: string;
   checks: DoctorCheck[];
+  /**
+   * Update facts behind an `update-available` Version row (at most one: the
+   * selected copy — what detect() picked = what runs). Absent when current
+   * or unchecked, so old JSON keeps its shape. The CLI renders these as
+   * stderr nudge lines; `--json` consumers get the structured facts here
+   * instead of parsing prose.
+   */
+  updates?: DoctorUpdate[];
+}
+
+/** One known-newer release: plain strings, JSON-safe by construction. */
+export interface DoctorUpdate {
+  /** Selected copy's probed version, shortened like the Version row. */
+  installed: string;
+  /** Registry latest, shortened the same way. */
+  latest: string;
+  /** Who installed it — decides whether the CLI can print a command. */
+  manager: InstallManager;
+  /** npm package the check ran against (the upgrade target). */
+  package: string;
 }
 
 /**
@@ -137,6 +157,8 @@ export async function doctor(
   const runtime = await registry.resolve(runtimeId);
   const info = runtime.info();
   const checks: DoctorCheck[] = [];
+  // Structured update facts for the report (set alongside the Version row).
+  let update: DoctorUpdate | null = null;
 
   const detected = await safe(() => runtime.detect());
   const status: RuntimeStatus | null = detected.value;
@@ -151,7 +173,9 @@ export async function doctor(
       // Compared against the SELECTED copy (what detect() picked = what runs).
       // Fail-open: offline/unknown registry yields no suffix, so a plain
       // version means "current or unchecked" — never an error row.
-      const suffix = await pendingUpdateSuffix(info.registryId, copies);
+      const pending = await pendingUpdate(info.registryId, copies);
+      const suffix = pending.suffix;
+      update = pending.update;
       if (!assessment.ok) {
         checks.push({
           name: "Version",
@@ -374,7 +398,14 @@ export async function doctor(
     });
   }
 
-  return { id: runtime.id, name: info.name, checks };
+  return {
+    id: runtime.id,
+    name: info.name,
+    checks,
+    // Structured update facts ride along only when there is something to
+    // say — same data the suffix used, no second fetch.
+    ...(update ? { updates: [update] } : {}),
+  };
 }
 
 /** Batch/shim wrapper suffixes that `spawn(shell:false)` cannot execute. */
@@ -384,24 +415,33 @@ function isWindowsShim(executable: string): boolean {
 
 /**
  * ` → <latest>` suffix for the Version row when the selected copy lags the
- * registry. "" when current, unchecked (no registryId), or unreachable —
- * callers cannot tell "current" from "unchecked", hence the wording rule:
- * a plain version never implies a completed check.
+ * registry, plus the structured facts behind it (for the CLI nudge line and
+ * `--json` consumers). One registry hit total — the facts reuse the exact
+ * fetch the suffix needs. "" / null when current, unchecked (no
+ * registryId), or unreachable — callers cannot tell "current" from
+ * "unchecked", hence the wording rule: a plain version never implies a
+ * completed check.
  */
-async function pendingUpdateSuffix(
+async function pendingUpdate(
   registryId: string | undefined,
   copies: InstalledCopy[],
-): Promise<string> {
-  if (!registryId) return "";
+): Promise<{ suffix: string; update: DoctorUpdate | null }> {
+  const none = { suffix: "", update: null };
+  if (!registryId) return none;
   const selected = copies.find((c) => c.selected) ?? copies.find((c) => c.invocable);
-  if (!selected?.version) return "";
+  if (!selected?.version) return none;
   const latest = await fetchLatestVersion(registryId);
-  if (!latest || !updateAvailable(selected.version, latest)) return "";
-  const parsed = parseSemver(latest);
-  const short = parsed
-    ? `${String(parsed.major)}.${String(parsed.minor)}.${String(parsed.patch)}`
-    : latest;
-  return ` → ${short}`;
+  if (!latest || !updateAvailable(selected.version, latest)) return none;
+  const short = shortVersion(latest);
+  return {
+    suffix: ` → ${short}`,
+    update: {
+      installed: shortVersion(selected.version),
+      latest: short,
+      manager: selected.manager,
+      package: registryId,
+    },
+  };
 }
 
 /**
@@ -444,9 +484,43 @@ function assessCliVersion(
 
 const GLYPH: Record<DoctorStatus, string> = { ok: "✓", warn: "⚠", fail: "✗" };
 
-export function formatReport(report: DoctorReport): string {
+/**
+ * Brand colors by runtime id (24-bit). Unknown ids stay plain — color is
+ * decoration, never information a script must parse.
+ */
+const AGENT_COLORS: Partial<Record<string, [number, number, number]>> = {
+  opencode: [128, 128, 128],
+  "opencode-acp": [128, 128, 128],
+  claude: [217, 119, 87],
+  codex: [55, 96, 223],
+};
+
+function colorizeAgentName(id: string, name: string, color: boolean): string {
+  if (!color) return name;
+  const rgb = AGENT_COLORS[id];
+  if (!rgb) return name;
+  return `\x1b[38;2;${String(rgb[0])};${String(rgb[1])};${String(rgb[2])}m${name}\x1b[0m`;
+}
+
+/** Whether ANSI colors may be emitted: explicit flag wins, otherwise TTY-only. */
+function autoColor(explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  if (process.env["FORCE_COLOR"] !== undefined && process.env["FORCE_COLOR"] !== "0") return true;
+  if (process.env["NO_COLOR"] !== undefined) return false;
+  if (process.env["TERM"] === "dumb") return false;
+  return process.stdout.isTTY;
+}
+
+export function formatReport(report: DoctorReport, options?: { color?: boolean }): string {
   const width = Math.max(...report.checks.map((c) => c.name.length));
-  const lines = ["Agent Runtime Doctor", "", report.name, "────────────────────────────", ""];
+  const color = autoColor(options?.color);
+  const lines = [
+    "Agent Runtime Doctor",
+    "",
+    colorizeAgentName(report.id, report.name, color),
+    "────────────────────────────",
+    "",
+  ];
   for (const c of report.checks) {
     // Reason codes render inline so a glance tells you where to fix; absent on ok rows.
     const suffix = c.reason ? ` [${c.reason}]` : "";

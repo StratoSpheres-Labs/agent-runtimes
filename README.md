@@ -131,6 +131,9 @@ agent-runtimes -d
 agent-runtimes -d --json
 agent-runtimes --version
 
+# A newer release known? A one-line nudge on stderr (never auto-installs,
+# --json stays clean, exit codes unchanged)
+
 # Local build — same path, long form (always works from source)
 node dist/cli.js doctor opencode
 ```

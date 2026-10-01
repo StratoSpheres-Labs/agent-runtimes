@@ -130,6 +130,8 @@ agent-runtimes -d
 agent-runtimes -d --json
 agent-runtimes --version
 
+# 有新版？stderr 上一行提醒（绝不自动装，--json 保持干净，退出码不变）
+
 # 本地构建——同一条路，长写法（从源码永远可用）
 node dist/cli.js doctor opencode
 ```
