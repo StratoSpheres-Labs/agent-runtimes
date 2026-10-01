@@ -118,6 +118,9 @@ await session.close();
 检查某个 runtime 的健康状况——能跑则退出码 `0`，阻塞性失败 `1`，用法错误 `2`：
 
 ```bash
+# 免安装——直接跑 registry 上的已发布 bin
+npx --package @stratosphereslab/agent-runtimes agent-runtimes -d opencode
+
 # 已安装的 bin（npm i -g @stratosphereslab/agent-runtimes）
 agent-runtimes -d opencode
 agent-runtimes -d claude

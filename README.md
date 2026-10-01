@@ -119,6 +119,9 @@ Check a runtime's health — exit `0` when it can run, `1` on blocking
 failures, `2` on usage error:
 
 ```bash
+# No install — run the published bin straight from the registry
+npx --package @stratosphereslab/agent-runtimes agent-runtimes -d opencode
+
 # Installed bin (npm i -g @stratosphereslab/agent-runtimes)
 agent-runtimes -d opencode
 agent-runtimes -d claude
