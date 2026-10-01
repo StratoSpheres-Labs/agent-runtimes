@@ -161,6 +161,17 @@ MCP          ✓  2 server(s): github, firecrawl
 - **Capabilities, not names** — branch on `runtime.capabilities().sessionResume`, never `runtime.id === "claude"`.
 - **Guardrails** — images (path-primary), workspace allowlist / sandbox / permission-mode gating, prompt-size budget, interactive permission requests (`AskUserQuestion` / ACP), secret-free logs and error details.
 
+## Reporting issues
+
+Found a bug? File it at [issues](https://github.com/StratoSpheres-Labs/agent-runtimes/issues) with:
+
+- `agent-runtimes -d <id>` output (or `-d --json` for the machine-readable report) and `agent-runtimes --version`
+- Your OS, Node version (`node --version`), and the agent CLI version
+- Minimal repro: the prompt/session options that trigger it, what you expected vs got, and the exit code
+- The `reason` code on the failing `doctor` row if there is one (`not-on-path`, `shim-broken`, …) — it tells us where to look
+
+Before filing, check `docs/PARITY.md`: deferred items are explicit non-goals, not bugs. And never paste secrets — pasted credentials can echo in transcripts; keep `history()` output redacted when sharing logs.
+
 ## Development
 
 ```bash

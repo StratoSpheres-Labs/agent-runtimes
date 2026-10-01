@@ -159,6 +159,17 @@ MCP          ✓  2 server(s): github, firecrawl
 - **按能力分支，不按名字** —— 检查 `runtime.capabilities().sessionResume`，不要写 `runtime.id === "claude"`。
 - **护栏** —— 图片（路径优先）、工作区 allowlist / 沙箱 / permission-mode 门控、prompt 长度预算、交互式权限请求（`AskUserQuestion` / ACP）、日志与错误详情不含密钥。
 
+## 反馈问题
+
+发现 bug？去 [issues](https://github.com/StratoSpheres-Labs/agent-runtimes/issues) 提交，带上：
+
+- `agent-runtimes -d <id>` 的输出（或 `-d --json` 机器可读报告）和 `agent-runtimes --version`
+- 操作系统、Node 版本（`node --version`）、agent CLI 版本
+- 最小复现：触发它的 prompt/会话选项、预期 vs 实际、退出码
+- 出错 `doctor` 行上的 `reason` 码（如果有，`not-on-path`、`shim-broken`……）——它直接告诉我们去哪看
+
+提交前先看 `docs/PARITY.md`：deferred 的是明确不做的，不是 bug。也绝不要贴密钥——粘贴过的凭证可能回显在转录里；分享日志时保持 `history()` 输出的脱敏状态。
+
 ## 开发
 
 ```bash
