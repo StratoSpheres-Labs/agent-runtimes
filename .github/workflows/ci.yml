@@ -14,6 +14,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Static gates run ONCE (ubuntu/node24): build, lint, typecheck, format,
+  # audit are platform-independent — running them 6x (full matrix) only
+  # burns fleet time and multiplies preemption reds. Platform coverage
+  # lives in the test matrix below (install + suite per OS/arch).
+  static:
+    name: static gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Gate order matters: build → lint → typecheck → format (AGENTS.md §3).
+      # format:check was previously enforced only locally — a badly
+      # formatted push stayed green until human review caught it.
+      - run: pnpm build
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm format:check
+
+      # Locks in the clean audit: moderate+ advisories fail the build.
+      # Low is informational only (dev-server-only shapes like the esbuild
+      # one we overrode) — Dependabot still reports them, CI doesn't burn on them.
+      - run: pnpm audit --audit-level moderate
+
   verify:
     name: verify (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
@@ -37,12 +72,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Gate order matters: build → lint → typecheck → test (AGENTS.md §3)
-      - run: pnpm build
-      - run: pnpm lint
-      - run: pnpm typecheck
-
-      # The suite runs twice at most: fleet preemption (notably
+      # Tests run from src (vitest transform, no dist needed) — build lives
+      # in the static job above. The suite runs twice at most: fleet preemption (notably
       # macos-latest during the Tahoe 26 rollout) kills the test step
       # with zero failing assertions ("The runner has received a
       # shutdown signal", 2026-09-27/28, repeated). A genuine failure
@@ -73,4 +104,4 @@ jobs:
 
       - name: Verify opencode real-CLI (after install)
         if: matrix.os == 'ubuntu-latest' && matrix.node == 24
-        run: opencode --version && pnpm test --run tests/integration/opencode.test.ts tests/integration/opencode-acp.test.ts
+        run: opencode --version && pnpm test tests/integration/opencode.test.ts tests/integration/opencode-acp.test.ts

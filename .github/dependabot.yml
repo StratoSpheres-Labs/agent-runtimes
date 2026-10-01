@@ -1,0 +1,14 @@
+# Keep action tags and npm deps fresh: weekly PRs, CI vets each one.
+# npm covers the pnpm lockfile (advisory bumps arrive as PRs instead of
+# surprise reds); github-actions keeps checkout/setup-node/action-setup
+# on maintained majors.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
