@@ -7,11 +7,11 @@ observe them through `Runtime → Session → Run → RuntimeEvent`.
 
 ## Contents
 
-| Section         | Pages                                                                                                                                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Getting started | [Overview](./getting-started/overview.md) · [101](./getting-started/101.md) · [Install](./getting-started/install.md) · [Quickstart](./getting-started/quickstart.md) · [BFF](./getting-started/bff.md) |
-| Architecture    | [architecture.md](../architecture.md) (model + seven rules) · [development.md](../development.md) (setup, test tiers, release)                                                                          |
-| Contracts       | [frontend.md](../frontend.md) (wire contract + error codes) · [runtime-authoring.md](../runtime-authoring.md) (new adapters) · [cross-platform.md](../cross-platform.md)                                |
+| Section         | Pages                                                                                                                                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Getting started | [Overview](./getting-started/overview.md) · [101](./getting-started/101.md) · [Install](./getting-started/install.md) · [Quickstart](./getting-started/quickstart.md) · [BFF](./getting-started/bff.md) · [Modes](./getting-started/modes.md) |
+| Architecture    | [architecture.md](../architecture.md) (model + seven rules) · [development.md](../development.md) (setup, test tiers, release)                                                                                                                |
+| Contracts       | [frontend.md](../frontend.md) (wire contract + error codes) · [runtime-authoring.md](../runtime-authoring.md) (new adapters) · [cross-platform.md](../cross-platform.md)                                                                      |
 
 ## Map
 

@@ -12,6 +12,7 @@
 - Install: docs/dev/getting-started/install.md — build from source, verify with doctor.
 - Quickstart: docs/dev/getting-started/quickstart.md — first run: detect → session → run → events.
 - BFF: docs/dev/getting-started/bff.md — the thin slice above the library: SSE endpoint, drain/cancel/permission rules, runId grouping (demo: examples/bff-sse.ts).
+- Modes: docs/dev/getting-started/modes.md — "plan mode" means three things: permission vs agent axes, per-runtime field mapping, gaps.
 
 ## Architecture (docs/)
 
