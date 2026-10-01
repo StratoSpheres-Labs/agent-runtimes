@@ -1,6 +1,6 @@
 {
   "name": "@stratosphereslab/agent-runtimes",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Universal runtime layer for local AI coding agents — unified Runtime → Session → Run → RuntimeEvent API",
   "type": "module",
   "engines": {
