@@ -72,8 +72,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Tests run from src (vitest transform, no dist needed) — build lives
-      # in the static job above. The suite runs twice at most: fleet preemption (notably
+      # Build stays in the matrix: tests/transcript.test.ts reads the
+      # bundled dist/index.js (node:sqlite import-rewrite guard), so the
+      # suite needs dist present. Lint/typecheck/format/audit stay in the
+      # static job above — they are the platform-independent part.
+      - run: pnpm build
+
+      # The suite runs twice at most: fleet preemption (notably
       # macos-latest during the Tahoe 26 rollout) kills the test step
       # with zero failing assertions ("The runner has received a
       # shutdown signal", 2026-09-27/28, repeated). A genuine failure
