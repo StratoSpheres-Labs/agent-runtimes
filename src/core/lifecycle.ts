@@ -275,6 +275,21 @@ export class RuntimeProcess {
       this.child.stderr?.removeAllListeners();
       this.child.stdin?.removeAllListeners();
       this.child.removeAllListeners();
+      // Re-arm AFTER the blanket removal above — done first, it would go with
+      // everything else.
+      //
+      // A failed spawn delivers its `error` from `_handle.onexit` on a later
+      // tick. With the listeners gone that event has nowhere to go, and Node
+      // escalates it to an *uncaught exception* — it kills the host rather than
+      // rejecting anything a caller could observe.
+      //
+      // This is a different defect from the rejected-promise guard in
+      // `spawn()`: that one is a promise nobody awaited, this one is an event
+      // nobody listened for. Cleanup must not leave a spawn failure able to
+      // crash the process.
+      this.child.on("error", () => {
+        // Intentionally empty: whatever we knew, we already reported.
+      });
       try {
         this.child.stdout?.destroy();
       } catch {
