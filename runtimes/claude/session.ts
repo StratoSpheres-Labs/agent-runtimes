@@ -221,6 +221,10 @@ export class ClaudeSession implements AgentSession {
             };
             try {
               const ans = await self.onPermissionRequest({
+                // Same id the `permission_request` event carried: a backend
+                // that parks the agent needs it to correlate the UI's answer
+                // with the request it is holding.
+                id: req.id,
                 method: "AskUserQuestion",
                 sessionId: self.claudeSessionId ?? undefined,
                 toolName: req.toolName,

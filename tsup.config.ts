@@ -32,4 +32,25 @@ export default defineConfig([
     target: "node20",
     banner: { js: "#!/usr/bin/env node" },
   },
+  {
+    // Browser-safe entry (`@stratosphereslab/agent-runtimes/assistant-ui`).
+    // It must never reach a `node:` builtin — a renderer importing the package
+    // ROOT would drag in `node:child_process`, so the adapter ships on its
+    // own subpath with its own build. es2022 (browsers, not Node), dts on so
+    // consumers get the types, zero external deps.
+    entry: {
+      "assistant-ui": "src/frontend/assistant-ui/index.ts",
+    },
+    format: ["esm"],
+    dts: {
+      // Inline shared declarations so dist/assistant-ui.d.ts is self-contained.
+      resolve: true,
+    },
+    sourcemap: true,
+    clean: false,
+    splitting: false,
+    treeshake: true,
+    platform: "browser",
+    target: "es2022",
+  },
 ]);

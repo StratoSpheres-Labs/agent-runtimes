@@ -14,6 +14,23 @@ export interface PermissionOption {
 }
 
 export interface PermissionRequest {
+  /**
+   * The request's own id — the SAME string as the `permission_request`
+   * event's `id`, and the first argument of
+   * `AgentRun.respondToPermission(id, optionId)`.
+   *
+   * This is what lets a backend that parks the agent (the usual shape: the
+   * handler returns a promise the UI later resolves) correlate the answer it
+   * receives from the browser with the request it is holding. Without it the
+   * backend must invent its own key, and that key can never match the id the
+   * UI was shown.
+   *
+   * Optional because not every transport has one: claude supplies the
+   * `tool_use_id`, ACP's `session/request_permission` carries no request id
+   * (and `AcpRun` does not implement `respondToPermission` — an ACP approval
+   * must be answered inside the handler, there is no UI round trip).
+   */
+  id?: string;
   /** JSON-RPC method, e.g. "session/request_permission" */
   method: string;
   sessionId?: string;

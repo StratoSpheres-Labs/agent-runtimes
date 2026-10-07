@@ -39,8 +39,10 @@ describe("runtimes facade (Phase 18)", () => {
         expect(status).toEqual({ installed: false });
       }
     }
-    // Three parallel live detects; slow under full-suite load (cf. models.test.ts).
-  }, 15000);
+    // Four live detects, each probing with a 10s budget — 15s is arithmetically
+    // impossible on a loaded box. Raised to the tier updates.test.ts already
+    // uses for live probes.
+  }, 60000);
 
   it("register without factory still falls back to DefaultRuntime", async () => {
     const registry = new RuntimeRegistry();

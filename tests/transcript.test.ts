@@ -10,6 +10,9 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+// node:sqlite needs node >= 22.5; the VALUE is imported lazily inside the test
+// so this file still loads on node 20. The type import is fully erased.
+import type { DatabaseSync } from "node:sqlite";
 import {
   redactSecrets,
   redactTranscriptEntries,
@@ -19,12 +22,12 @@ import {
   type TranscriptEntry,
 } from "../src/definition/transcript.js";
 import { parseCodexRollout, readCodexTranscript } from "../runtimes/codex/transcript.js";
+import { opencodeDbPath, readOpencodeTranscript } from "../runtimes/opencode/transcript.js";
 import {
   findClaudeTranscript,
   parseClaudeTranscript,
   readClaudeTranscript,
 } from "../runtimes/claude/transcript.js";
-import { readOpencodeTranscript } from "../runtimes/opencode/transcript.js";
 
 describe("transcript helpers", () => {
   it("toMs normalizes seconds and milliseconds, rejects the rest", () => {
@@ -365,6 +368,282 @@ describe("readOpencodeTranscript", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  }, 30000);
+
+  describe("sub-agent transcripts (opencode)", () => {
+    /** node:sqlite is optional (node >= 22.5); skip cleanly when absent. */
+    async function sqliteOrSkip(): Promise<{ DatabaseSync: typeof DatabaseSync } | null> {
+      return await import("node:sqlite").catch((): null => null);
+    }
+
+    /**
+     * Build a store shaped like a real opencode one: a parent session whose
+     * assistant dispatched two `task` calls, each naming a child session in its
+     * output, plus one orphan child with no task part at all.
+     */
+    async function seed(): Promise<string> {
+      const sqlite = await sqliteOrSkip();
+      if (!sqlite) throw new Error("skip");
+      const base = mkdtempSync(join(tmpdir(), "agent-runtimes-sub-"));
+      const db = new sqlite.DatabaseSync(join(base, "opencode.db"));
+      db.exec(
+        "CREATE TABLE session (id TEXT, project_id TEXT, parent_id TEXT, title TEXT, agent TEXT, time_created INTEGER);" +
+          "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);" +
+          "CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);",
+      );
+      const msg = db.prepare("INSERT INTO message VALUES (?, ?, ?, ?, ?)");
+      const part = db.prepare("INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)");
+      const ses = db.prepare("INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)");
+
+      ses.run("ses_parent", "p", null, "root", null, 1000);
+      ses.run("ses_child_a", "p", "ses_parent", "Explore X (@explore subagent)", "explore", 1100);
+      ses.run("ses_child_b", "p", "ses_parent", "Audit Y (@general subagent)", "general", 1200);
+      // No task part ever names this one — must be dropped, not guessed onto one.
+      ses.run("ses_orphan", "p", "ses_parent", "Orphan", "explore", 1300);
+      // A grandchild under child A, for the depth test.
+      ses.run("ses_grandchild", "p", "ses_child_a", "Deep dive", "explore", 1150);
+
+      msg.run("msg_u", "ses_parent", 2000, 2000, JSON.stringify({ role: "user" }));
+      part.run("p1", "msg_u", "ses_parent", 1, 1, JSON.stringify({ type: "text", text: "go" }));
+      msg.run("msg_a", "ses_parent", 3000, 3000, JSON.stringify({ role: "assistant" }));
+      // A tool part that mentions a child id but is NOT a `task` call, inserted
+      // BEFORE the task parts on purpose. Correlation takes the first match, so
+      // without the `task`-only restriction this part would win and wrongly
+      // become the parent of `ses_child_b`. Appending it last would let the test
+      // pass for the wrong reason.
+      part.run(
+        "p0",
+        "msg_a",
+        "ses_parent",
+        0,
+        0,
+        JSON.stringify({
+          type: "tool",
+          tool: "bash",
+          callID: "call_c",
+          state: { status: "completed", output: "grep ses_child_b" },
+        }),
+      );
+      part.run(
+        "p2",
+        "msg_a",
+        "ses_parent",
+        2,
+        2,
+        JSON.stringify({
+          type: "tool",
+          tool: "task",
+          callID: "call_a",
+          state: {
+            status: "completed",
+            input: { description: "Explore X", subagent_type: "explore" },
+            output: '<task id="ses_child_a" state="completed">done</task>',
+          },
+        }),
+      );
+      part.run(
+        "p3",
+        "msg_a",
+        "ses_parent",
+        3,
+        3,
+        JSON.stringify({
+          type: "tool",
+          tool: "task",
+          callID: "call_b",
+          state: {
+            status: "completed",
+            input: { description: "Audit Y" },
+            output: '<task id="ses_child_b" state="completed">ok</task>',
+          },
+        }),
+      );
+      for (const [id, sid, text] of [
+        ["m_a1", "ses_child_a", "child A answer"],
+        ["m_b1", "ses_child_b", "child B answer"],
+        ["m_g1", "ses_grandchild", "grandchild answer"],
+        ["m_o1", "ses_orphan", "orphan answer"],
+      ] as const) {
+        msg.run(id, sid, 4000, 4000, JSON.stringify({ role: "assistant" }));
+        part.run(`${id}_p`, id, sid, 1, 1, JSON.stringify({ type: "text", text }));
+      }
+      // Child A dispatched its own sub-agent, so depth is observable.
+      msg.run("m_a2", "ses_child_a", 5000, 5000, JSON.stringify({ role: "assistant" }));
+      part.run(
+        "m_a2_p",
+        "m_a2",
+        "ses_child_a",
+        1,
+        1,
+        JSON.stringify({
+          type: "tool",
+          tool: "task",
+          callID: "call_a2",
+          state: { status: "completed", output: '<task id="ses_grandchild">x</task>' },
+        }),
+      );
+      db.close();
+      return base;
+    }
+
+    async function withSeed(run: (base: string) => Promise<void>): Promise<{ skipped: boolean }> {
+      if ((await sqliteOrSkip()) === null) return { skipped: true };
+      const base = await seed();
+      try {
+        await run(base);
+        return { skipped: false };
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    }
+
+    it("omits sub-agents by default (opt-in)", async () => {
+      await withSeed(async (base) => {
+        const entries = await readOpencodeTranscript({ sessionId: "ses_parent", dataDir: base });
+        // Nothing may grow without an explicit request.
+        for (const e of entries) expect(e.subAgents).toBeUndefined();
+      });
+    });
+
+    it("nests a child under the task call that dispatched it", async () => {
+      await withSeed(async (base) => {
+        const entries = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+          maxDepth: 0,
+        });
+        const tasks = entries.filter((e) => e.toolName === "task");
+        expect(tasks).toHaveLength(2);
+        const first = tasks[0]?.subAgents;
+        expect(first).toHaveLength(1);
+        expect(first?.[0]).toMatchObject({
+          id: "ses_child_a",
+          name: "explore",
+          title: "Explore X (@explore subagent)",
+          depth: 0,
+        });
+        // The child folded its own entries, including the `task` call it made —
+        // it is a transcript, not a summary.
+        expect(first?.[0]?.entries.map((e) => e.text)).toContain("child A answer");
+        expect(first?.[0]?.entries.some((e) => e.toolName === "task")).toBe(true);
+      });
+    });
+
+    it("never attaches a child to a non-task tool part", async () => {
+      await withSeed(async (base) => {
+        const entries = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+          maxDepth: 0,
+        });
+        const bash = entries.find((e) => e.toolName === "bash");
+        // `call_c`'s output mentions ses_child_b and it is stored BEFORE the
+        // task parts, so without the `task`-only restriction it would win the
+        // correlation. It must not become a parent.
+        expect(bash).toBeDefined();
+        expect(bash?.subAgents).toBeUndefined();
+        // …and the child must still be attached to its real task call.
+        expect(entries.flatMap((e) => e.subAgents ?? []).map((s) => s.id)).toContain("ses_child_b");
+      });
+    });
+
+    it("drops an unlinkable child instead of guessing a parent", async () => {
+      await withSeed(async (base) => {
+        const entries = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+        });
+        const ids = entries.flatMap((e) => (e.subAgents ?? []).map((s) => s.id));
+        // Measured live: 65/76 children tie cleanly, 11 do not. Those are dropped.
+        expect(ids).toContain("ses_child_a");
+        expect(ids).toContain("ses_child_b");
+        expect(ids).not.toContain("ses_orphan");
+        expect(JSON.stringify(entries)).not.toContain("orphan answer");
+      });
+    });
+
+    it("expands grandchildren only while depth allows", async () => {
+      await withSeed(async (base) => {
+        const shallow = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+          maxDepth: 0,
+        });
+        const childA = shallow
+          .flatMap((e) => e.subAgents ?? [])
+          .find((s) => s.id === "ses_child_a");
+        expect(childA?.entries.some((e) => e.subAgents !== undefined)).toBe(false);
+
+        const deep = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+          maxDepth: 2,
+        });
+        const deepChild = deep
+          .flatMap((e) => e.subAgents ?? [])
+          .find((s) => s.id === "ses_child_a");
+        const grand = deepChild?.entries.flatMap((e) => e.subAgents ?? []);
+        expect(grand?.map((g) => g.id)).toContain("ses_grandchild");
+      });
+    });
+
+    it("redacts inside nested transcripts too", async () => {
+      await withSeed(async (base) => {
+        const entries = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+          maxDepth: 1,
+        });
+        const nested = entries.flatMap((e) => e.subAgents ?? []);
+        expect(nested.length).toBeGreaterThan(0);
+        // A flat redact pass would mark the parent `redacted: true` and leave
+        // every sub-agent entry untouched — the exact shape that makes a caller
+        // believe the whole tree was scrubbed.
+        for (const sub of nested) {
+          for (const inner of sub.entries) {
+            expect(inner.redacted).toBe(true);
+          }
+        }
+      });
+    });
+
+    it("clamps a nonsense maxDepth instead of throwing or hanging", async () => {
+      await withSeed(async (base) => {
+        for (const maxDepth of [-5, Number.NaN, 0.9]) {
+          const entries = await readOpencodeTranscript({
+            sessionId: "ses_parent",
+            dataDir: base,
+            includeSubAgents: true,
+            maxDepth,
+          });
+          expect(Array.isArray(entries)).toBe(true);
+        }
+      });
+    });
+
+    it("degrades to [] on a store with no session table (schema drift)", async () => {
+      await withSeed(async (base) => {
+        const sqlite = await sqliteOrSkip();
+        if (!sqlite) return;
+        const db = new sqlite.DatabaseSync(join(base, "opencode.db"));
+        db.exec("DROP TABLE session;");
+        db.close();
+        const entries = await readOpencodeTranscript({
+          sessionId: "ses_parent",
+          dataDir: base,
+          includeSubAgents: true,
+        });
+        // The parent transcript still reads; sub-agents quietly vanish.
+        expect(entries.length).toBeGreaterThan(0);
+        expect(entries.every((e) => e.subAgents === undefined)).toBe(true);
+      });
+    });
   });
 
   it("bundled dist keeps a working node:sqlite reference (no import rewrite)", () => {
@@ -387,7 +666,7 @@ describe("readOpencodeTranscript", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 });
 
 describe("session.history()", () => {
@@ -409,6 +688,16 @@ describe("session.history()", () => {
 });
 
 describe("transcript (live, guarded)", () => {
+  /** node:sqlite is optional (node >= 22.5); live legs skip without it. */
+  async function sqliteOrSkip(): Promise<{ DatabaseSync: typeof DatabaseSync } | null> {
+    return await import("node:sqlite").catch((): null => null);
+  }
+
+  /** Default opencode store path, or undefined when this box has none. */
+  function liveOpencodeDb(): string | undefined {
+    const path = opencodeDbPath();
+    return existsSync(path) ? path : undefined;
+  }
   it("codex: persisted rollouts parse to valid entries", () => {
     const root = join(homedir(), ".codex", "sessions");
     if (!existsSync(root)) return;
@@ -426,7 +715,50 @@ describe("transcript (live, guarded)", () => {
       }
       return;
     }
-  });
+  }, 30000);
+
+  it("opencode: real dispatched sub-agents nest under their task call", async () => {
+    // The store used here had 76 child sessions across 38 parents; a parent
+    // with children is discovered rather than hard-coded so this keeps working
+    // as transcripts rotate.
+    const base = liveOpencodeDb();
+    if (base === undefined) return;
+    const sqlite = await sqliteOrSkip();
+    if (!sqlite) return;
+    let parent: string | undefined;
+    try {
+      const db = new sqlite.DatabaseSync(base, { readOnly: true });
+      parent = (
+        db
+          .prepare(
+            "SELECT parent_id AS p FROM session WHERE parent_id IS NOT NULL GROUP BY parent_id ORDER BY COUNT(*) DESC LIMIT 1",
+          )
+          .get() as { p?: string } | undefined
+      )?.p;
+      db.close();
+    } catch {
+      return;
+    }
+    if (!parent) return;
+
+    const nested = await readOpencodeTranscript({
+      sessionId: parent,
+      includeSubAgents: true,
+      maxDepth: 0,
+    });
+    const subs = nested.flatMap((e) => e.subAgents ?? []);
+    expect(subs.length).toBeGreaterThan(0);
+    for (const sub of subs) {
+      expect(sub.id).toMatch(/^ses_/);
+      expect(sub.depth).toBe(0);
+      // Redaction must have reached the nested text on a real store too.
+      for (const inner of sub.entries) expect(inner.redacted).toBe(true);
+    }
+    // Only `task` ever dispatches a sub-agent — verified across every parent.
+    for (const e of nested) {
+      if (e.subAgents !== undefined) expect(e.toolName).toBe("task");
+    }
+  }, 30000);
 
   it("claude: the verified live turn reads back", () => {
     // session_started 1609814a-… from the 2.1.276 end-to-end turn.
@@ -436,7 +768,7 @@ describe("transcript (live, guarded)", () => {
     });
     if (entries.length === 0) return; // transcript rotated away
     expect(entries.some((e) => e.role === "assistant" && e.text.includes("hi"))).toBe(true);
-  });
+  }, 30000);
 });
 
 function allRollouts(root: string): string[] {

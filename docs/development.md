@@ -55,7 +55,38 @@ pnpm build   # tsup ESM node20 → dist/index.js + dist/index.d.ts + dist/cli.js
 ```
 
 - `dist/` is `gitignored` (`files: ["dist"]` in `package.json` ensures it is still published). Never edit `dist/` by hand.
-- `pnpm build` uses `tsup.config.ts` with two entries (`index` and `cli`), `splitting:false`, `treeshake:true`, `sourcemap:true`, `dts.resolve:true` (self-contained `dist/index.d.ts`).
+- `pnpm build` uses `tsup.config.ts` with three entries: `index` + `cli` (`target: "node20"`) and `assistant-ui` (`platform: "browser"`, `target: "es2022"`), all `splitting:false`, `treeshake:true`, `sourcemap:true`, `dts.resolve:true`. The `assistant-ui` entry is a **separate bundle on purpose** — see below.
+
+## The browser boundary (assistant-ui subpath)
+
+`src/frontend/assistant-ui/` is the only code in `src/` that may run in a
+renderer. Four invariants, all machine-enforced:
+
+1. **Its own build entry and subpath.** `@stratosphereslab/agent-runtimes/assistant-ui` →
+   `dist/assistant-ui.js`, which has **zero imports** (no builtins, no runtime
+   deps). Re-exporting it from `src/index.ts` would put `node:child_process`
+   back in a browser bundle — do not.
+2. **Its own tsconfig project.** `tsconfig.json` (Node) _excludes_
+   `src/frontend/` and keeps `lib: ["ES2022"]`; `tsconfig.frontend.json` adds
+   `"DOM"` for the adapter and its tests. `pnpm typecheck` runs both, and
+   `eslint.config.js` names both in `parserOptions.project` (`projectService` is
+   not used — it only discovers the nearest tsconfig, not sibling projects).
+   The payoff: `document` inside `src/cli.ts` is a **compile error**, so the
+   Node-only guarantee cannot rot.
+3. **`tests/assistant-ui-browser-safe.test.ts`** walks the transitive
+   _runtime_ import graph (erased `import type` edges excluded) and fails on
+   any `node:` builtin, any bare specifier, or any reach into `src/core/`
+   beyond `errors.ts`.
+4. **Local structural types, not assistant-ui's.** `types.ts` mirrors the
+   upstream shapes so the bundle needs no peer dependency.
+   `tests/assistant-ui-conformance.test.ts` assigns what we emit to the real
+   `@assistant-ui/core` types (a devDependency) so upstream drift fails
+   `pnpm typecheck` here rather than in a consumer's build. Note the two part
+   unions: `AuiPart` is valid in both runtimes, `AuiExternalPart` adds the
+   `data-<name>` spelling that only `ThreadMessageLike` accepts.
+
+Adding a `node:` import there is not a lint nit — it breaks every consumer's
+browser build.
 
 ---
 
@@ -67,6 +98,7 @@ src/definition/   # identity, executable, input, transport, session, capability,
 src/events/       # RuntimeEvent (session_started|text_delta|reasoning_delta|tool_started|tool_finished|usage|permission_request|permission_denied|error|done) + EventStream
 src/transport/    # transport interface + StdioTransport + AcpTransport (JSON-RPC over stdio)
 src/parser/       # parser interface + JsonlParser + AcpParser
+src/frontend/assistant-ui/ # browser-safe chat-UI adapter, own package subpath (never re-export from src/index.ts)
 src/discovery/    # executable (where/which), version, capabilities (help probing), models, npm-shim, run-command, env
 runtimes/opencode/  # definition.ts, parser.ts, runtime.ts, session.ts, fixtures/*.jsonl, index.ts
 runtimes/claude/    # same 5 files
@@ -142,8 +174,8 @@ Key invariants (see `architecture.md`): `Session ≠ Process` (each `run()` spaw
 ```bash
 pnpm build      # tsup → dist/ — fails if tsup config or tsconfig is broken
 pnpm lint       # eslint flat + typescript-eslint strict + prettier — fails on `no-empty`, `no-unused-expressions`, `restrict-template-expressions` etc.
-pnpm typecheck  # tsc --noEmit — fails on `noUnnecessaryCondition`, missing capability fields, etc.
-pnpm test       # vitest run — 553 tests, ~40s, 56 files
+pnpm typecheck  # tsc --noEmit — fails on `noUnnecessaryCondition`, missing capability fields, assistant-ui type drift
+pnpm test       # vitest run — 728 tests, ~30s, 66 files
 ```
 
 - **Fixing `build`**: check `tsup.config.ts` `entry` and `tsconfig.json` `moduleResolution: bundler`.
@@ -171,6 +203,14 @@ expect([...a, ...b, ...p.flush()]).toContainEqual({ type: "text_delta" });
 ```
 
 Cover `illegal.jsonl` (invalid JSON → `INVALID_JSON`), `unknown.jsonl` (`UNKNOWN_EVENT`), `empty.jsonl` (`0 events`), and a `user-tool-result.jsonl` / `permission-ask.jsonl` for the `AskUserQuestion → permission_request` path.
+
+### 1b. Frontend adapter (browser-safe)
+
+- `tests/assistant-ui-fold.test.ts` — the `RuntimeEvent` → parts/status mapping, one case per discriminant, plus the three assistant-ui invariants (cumulative snapshots, never an empty trailing part, derived status), interleaving order, and fail-open on an unknown discriminant.
+- `tests/assistant-ui-stream.test.ts` — SSE + NDJSON: coalesced chunks, **every** JSON split boundary, CRLF, comments, `[DONE]`, multi-byte characters cut mid-sequence, abort mid-stream, reader-lock release on early break.
+- `tests/assistant-ui-adapters.test.ts` — the transport and both runtime entry points against scripted fake `fetch` bodies (including one held open mid-turn, so `emit` is provably attaching to a live turn).
+- `tests/assistant-ui-conformance.test.ts` — compile-time assignability to `@assistant-ui/core`.
+- `tests/assistant-ui-browser-safe.test.ts` — import-graph guard (see the browser-boundary section).
 
 ### 2. Integration
 
@@ -422,7 +462,7 @@ import {
   pnpm build                        # must rebuild after src changes
   ```
 
-  `package.json` is `type:module`, `sideEffects:false` (zero runtime deps — `node:` builtins only), `exports` maps `"."` (+ `"./package.json"`), `bin: {agent-runtimes:"dist/cli.js"}`, `files: ["dist","NOTICE"]`, `publishConfig: {access:"public", provenance:true}`.
+  `package.json` is `type:module`, `sideEffects:false` (zero runtime deps — `node:` builtins only), `exports` maps `"."`, `"./assistant-ui"` (the browser-safe adapter) plus `"./package.json"`, `bin: {agent-runtimes:"dist/cli.js"}`, `files: ["dist","NOTICE"]`, `publishConfig: {access:"public", provenance:true}`.
 
 - **Share via npm** (tag-driven; `.github/workflows/publish.yml`):
 
@@ -455,6 +495,36 @@ Only two outcomes need a human:
 
 - **Something broke** → add a `minimum` floor with a `VERSION_FLOORS` entry (`src/definition/compat.ts`) citing the failing test as `evidence`. Floors without evidence are rejected by `tests/compat.test.ts`.
 - **A new flag you want to use** (e.g. `--agent`) → verify it in `--help` first, wire it behind `buildArgs()`, and add it to `ADVISORY_PROBE_FLAGS` (`src/discovery/capabilities.ts`).
+
+### Probing is three-state, and that is load-bearing
+
+`--help` probing answers `true`, `false`, **or `"unknown"`** — and the third one
+must never collapse into `false`:
+
+```ts
+import { probeHelpFlagsDetailed } from "@stratosphereslab/agent-runtimes";
+
+const probe = await probeHelpFlagsDetailed(cmd, ["--add-dir"], ["-p", "--help"]);
+if (probe.status !== "ok") return; // probe never completed — say so
+if (probe.flags["--add-dir"] === true) /* … */ ;
+```
+
+`probeHelpFlagsDetailed` reports `status: "ok" | "timeout" | "error"`, and a
+non-`"ok"` probe yields `"unknown"` for every flag rather than `false`. The
+reasons this matters rather than being pedantry:
+
+- A probe timeout truncates help text mid-flag (`--permission-m`), which reads
+  as "absent" for a flag the CLI supports.
+- `runCommand` allows 10s per probe, so a loaded machine hits this routinely —
+  the flake is not hypothetical.
+- A false "this CLI lacks X" cannot be corrected downstream, because it is
+  indistinguishable from the truth.
+
+`probeHelpFlags` (boolean-only) and `capabilitiesFromHelp` are kept for the
+published signature; `capabilitiesFromHelp` now only downgrades a capability on
+a **definitive** `false`, and `unknown` leaves `base` alone. The doctor Flags row
+emits `flags-probe-timeout` / `flags-probe-failed` warnings instead of dropping
+the row when the probe fails.
 
 No breakage + no new flag = zero diff. That is the contract (`src/definition/version.ts`).
 

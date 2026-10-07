@@ -198,6 +198,7 @@ const ALL_CAPS: RuntimeCapabilities = {
   agentSelection: true,
   midRunInput: true,
   historySeed: true,
+  subAgents: false,
   systemPrompt: true,
   maxTokens: true,
   costBudget: true,

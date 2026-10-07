@@ -20,6 +20,7 @@ function makeDef(id: string): RuntimeDefinition {
       agentSelection: false,
       midRunInput: false,
       historySeed: false,
+      subAgents: false,
       systemPrompt: false,
       maxTokens: false,
       costBudget: false,
@@ -75,5 +76,8 @@ describe("DefaultRuntime.detect", () => {
       expect(status).toEqual({ installed: false });
     }
     // Live version probes are slow under parallel load (cf. models.test.ts).
-  }, 15000);
+    // One probe allows 10s inside runCommand, so 15s could not survive a
+    // loaded box — this flaked as "Test timed out in 15000ms", never an
+    // assertion failure.
+  }, 30000);
 });

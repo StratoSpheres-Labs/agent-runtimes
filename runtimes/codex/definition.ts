@@ -66,6 +66,10 @@ export const codexDefinition: RuntimeDefinition = {
     // stdin carries one prompt per exec — no mid-run channel.
     midRunInput: false,
     historySeed: false,
+    // False on evidence, not on omission: across 175 rollouts there were zero
+    // real `spawn_agent` tool calls (the 77 textual hits are all aspirational
+    // system-prompt copy), and `session_meta` carries no parent link.
+    subAgents: false,
     // No verified -c keys for system instructions / token budgets.
     systemPrompt: false,
     maxTokens: false,

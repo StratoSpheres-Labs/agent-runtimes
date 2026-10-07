@@ -221,12 +221,15 @@ async function pickBestExecutable(
       }
     } else {
       // Check if candidate is invocable at all (even if version parse fails)
-      const invocable = await isInvocable(cand);
-      if (invocable) {
+      const verdict = await probeInvocableVerdict(cand);
+      if (verdict === "yes") {
         anyInvocable = true;
-      } else {
+      } else if (verdict === "no") {
         rememberUnusableExecutable(command, cand);
       }
+      // "unknown" (timed out) is deliberately NOT recorded: a slow probe is
+      // not proof of a broken shim, and remembering it would hide a working
+      // CLI from the next pass for the whole TTL.
     }
   }
   if (best) return best;
@@ -239,20 +242,59 @@ async function pickBestExecutable(
   return anyInvocable && fallback !== undefined ? fallback : null;
 }
 
-/** Spawn probe shared with findAllInstalls (shim-aware on win32). */
-export async function isInvocable(executable: string): Promise<boolean> {
+/**
+ * Tri-state invocability probe.
+ *
+ * `unknown` exists because a probe that TIMES OUT is not evidence of a broken
+ * shim — it is evidence of a slow machine. Collapsing "slow" into "broken"
+ * made a perfectly good CLI get recorded in `unusableSince` for 60s, so a
+ * loaded box (parallel test workers, a busy laptop, an antivirus scanning a
+ * freshly written binary) could make `detect()` / `doctor` report a working
+ * agent as missing. Nothing inconclusive may reach `rememberUnusableExecutable`.
+ */
+type InvocableVerdict = "yes" | "no" | "unknown";
+
+export interface ProbeInvocableOptions {
+  /** Override the probe timeout (default: `runCommand`'s 10s). For tests. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Tri-state invocability probe.
+ *
+ * `unknown` exists because a probe that TIMES OUT is not evidence of a broken
+ * shim — it is evidence of a slow machine. Collapsing "slow" into "broken"
+ * made a perfectly good CLI get recorded in `unusableSince` for 60s, so a
+ * loaded box (parallel test workers, a busy laptop, an antivirus scanning a
+ * freshly written binary) could make `detect()` / `doctor` report a working
+ * agent as missing. Nothing inconclusive may reach `rememberUnusableExecutable`.
+ */
+export async function probeInvocableVerdict(
+  executable: string,
+  options?: ProbeInvocableOptions,
+): Promise<InvocableVerdict> {
   // .cmd shims are not directly spawnable with shell:false, but are usable
   // via resolveShimTarget (node-script shims and native-binary shims alike)
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)) {
     const shim = resolveShimTarget(executable, "win32");
-    if (shim) return true;
+    if (shim) return "yes";
   }
-  const res = await runCommand({ command: executable, args: ["--version"] });
-  if (res.timedOut) return false;
-  // Not invocable if spawn failed (ENOENT etc.) — runCommand returns code null with empty output
+  const res = await runCommand({
+    command: executable,
+    args: ["--version"],
+    ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+  });
+  // Slow, not broken — see the verdict type's doc comment.
+  if (res.timedOut) return "unknown";
+  // Spawn failed (ENOENT etc.) — runCommand reports code null with no output.
   if (res.code === null && res.stdout.trim().length === 0 && res.stderr.trim().length === 0)
-    return false;
-  return true;
+    return "no";
+  return "yes";
+}
+
+/** Spawn probe shared with findAllInstalls (shim-aware on win32). */
+export async function isInvocable(executable: string): Promise<boolean> {
+  return (await probeInvocableVerdict(executable)) !== "no";
 }
 
 async function probeVersionSafe(executable: string): Promise<string | null> {

@@ -110,6 +110,38 @@ export class CodexParser implements RuntimeParser {
         // Transport marker, not an event.
         return [];
       }
+      case "error": {
+        // Recoverable progress notices — verified live on 0.159.x:
+        // `{"type":"error","message":"Reconnecting... 3/5 (…)"}` while the
+        // transport retries. They fell through to `default:` and came back as
+        // an `UNKNOWN` error event, so a turn that was *recovering* was marked
+        // failed on every retry — five spurious failures on a 4-minute stall.
+        //
+        // Dropped with provenance, exactly like the config-warning
+        // `item.completed/error` below. The definitive failure still arrives as
+        // `turn.failed`, which carries the real reason.
+        return [];
+      }
+      case "turn.failed": {
+        // The ONLY place codex states why a turn failed, and the terminal
+        // counterpart to `turn.completed`. Without this case the reason falls
+        // through to `default:` and is lost, so the run ends as
+        // NON_ZERO_EXIT / "Process exited with code 1" — verified live on a
+        // network-blocked box, where codex said
+        // `turn.failed: workspace routing discovery timed out` and exited 1.
+        // The user got the exit code and none of the cause.
+        //
+        // The trailing `done` is what makes the cause survive: `Run` skips its
+        // own NON_ZERO_EXIT once a parser has emitted a terminal `done`
+        // (`sawDone`), so this error is the one the caller ends up holding.
+        const err = rec["error"] as Record<string, unknown> | undefined;
+        const message =
+          asString(err?.["message"]) ??
+          asString(rec["message"]) ??
+          "codex turn failed (no reason given)";
+        const code = asString(err?.["code"]) ?? "TURN_FAILED";
+        return [{ type: "error", error: { code, message } }, { type: "done" }];
+      }
       case "turn.completed": {
         const usage = rec["usage"] as Record<string, unknown> | undefined;
         if (usage !== undefined) {

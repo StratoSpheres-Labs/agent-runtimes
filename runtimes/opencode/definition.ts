@@ -55,6 +55,11 @@ export const opencodeDefinition: RuntimeDefinition = {
     // stdin carries one prompt per process — no mid-run channel.
     midRunInput: false,
     historySeed: false,
+    // VERIFIED live: `session.parent_id` links dispatched sub-agent sessions
+    // back to the parent, and the spawning `task` tool part carries the child
+    // id in its output (76 child sessions / 65 tied to a task part on this
+    // machine). See runtimes/opencode/transcript.ts for the correlation.
+    subAgents: true,
     systemPrompt: false,
     maxTokens: false,
     // No cost-budget flag on `opencode run` (verified in --help).

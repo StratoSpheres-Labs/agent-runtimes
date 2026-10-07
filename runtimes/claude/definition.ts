@@ -56,6 +56,15 @@ export const claudeDefinition: RuntimeDefinition = {
     // answers stay available via respondToPermission (explicit turn pause).
     midRunInput: false,
     historySeed: false,
+    // FALSE on evidence, not on omission. Sub-agent turns DO exist as sibling
+    // `agent-<agentId>.jsonl` files tagged `isSidechain` — but the link back to
+    // the spawning tool call is unverified: on this box exactly 1 of 93
+    // transcripts has sidechain entries, its `sourceToolAssistantUUID` resolves
+    // to a message INSIDE the sidechain file itself (a `Bash` call, not a Task
+    // call), and the parent transcript for that turn is absent. Reporting
+    // `true` would promise a nesting we cannot yet correlate; see
+    // docs/PARITY.md §4.
+    subAgents: false,
     // `--append-system-prompt` (verified on 2.1.278; append, never replace).
     systemPrompt: true,
     // No verified max-tokens channel — wire only observed flags.

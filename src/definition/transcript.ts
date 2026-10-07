@@ -29,6 +29,61 @@ export interface TranscriptEntry {
    * `includeRawInputs` opt-out.
    */
   redacted?: boolean;
+  /**
+   * Sub-agent runs spawned by THIS tool call, when the caller asked for them
+   * via `includeSubAgents` and the runtime records them (see
+   * `RuntimeCapabilities.subAgents`). Only ever set on a `tool` entry.
+   *
+   * Absent — not `[]` — when there are none, when they were not requested, or
+   * when the runtime has no such capability. An empty array would claim "we
+   * looked and there were none", which is a different statement.
+   *
+   * A sub-agent the CLI recorded but that could not be tied back to a spawning
+   * tool call is omitted rather than guessed onto a plausible one: this is a
+   * read-only projection, and a wrong parent is a lie the caller cannot detect.
+   */
+  subAgents?: readonly SubAgentTurn[];
+}
+
+/**
+ * One nested agent run — a sub-agent the parent session dispatched.
+ *
+ * Deliberately a *recording of what the CLI did*, not a claim about causality:
+ * `entries` is that sub-agent's own transcript, folded by the same rules (so
+ * redaction, truncation, and reasoning/image dropping apply unchanged, at every
+ * depth).
+ */
+export interface SubAgentTurn {
+  /** Native, opaque id of the nested run (a child session id, an agent id). */
+  readonly id: string;
+  /** The sub-agent's own name when the CLI recorded one (e.g. `"explore"`). */
+  readonly name?: string;
+  /** One-line label the CLI recorded for the run, when it has one. */
+  readonly title?: string;
+  /** The nested transcript, in the same order the CLI recorded it. */
+  readonly entries: readonly TranscriptEntry[];
+  /** Millisecond epoch when the CLI recorded the run (absent when unknown). */
+  readonly timestamp?: number;
+  /** `0` for a direct child of the session that was read. */
+  readonly depth: number;
+}
+
+/** How deep `includeSubAgents` expands when the caller names no limit. */
+export const DEFAULT_SUB_AGENT_MAX_DEPTH = 2;
+
+/**
+ * Clamp a caller-supplied depth into a usable level count.
+ *
+ * Shared so every adapter agrees on what `-1`, `NaN`, and a missing value mean —
+ * an adapter that interpreted them differently would make "depth 1" a different
+ * amount of transcript per runtime, which is exactly the kind of drift this
+ * project treats as a bug.
+ */
+export function resolveMaxDepth(requested: number | undefined): number {
+  if (requested === undefined || !Number.isFinite(requested)) {
+    return DEFAULT_SUB_AGENT_MAX_DEPTH;
+  }
+  return Math.max(0, Math.trunc(requested));
 }
 
 export interface HistoryOptions {
@@ -42,6 +97,26 @@ export interface HistoryOptions {
    * trusted first-party consumers — raw text may carry pasted secrets.
    */
   includeRawInputs?: boolean;
+  /**
+   * Nest sub-agent transcripts under the tool call that dispatched them
+   * (default **false**).
+   *
+   * Off by default because it multiplies the returned text: one turn can pull
+   * in a dozen full sub-agent transcripts, all subject to the same pasted-secret
+   * exposure as the parent. Off is also the honest default for a runtime whose
+   * `subAgents` capability is false — such a runtime returns nothing either way.
+   *
+   * Has no effect on a runtime without the capability; it never throws.
+   */
+  includeSubAgents?: boolean;
+  /**
+   * How many nesting levels to expand (default {@link DEFAULT_SUB_AGENT_MAX_DEPTH}).
+   * `0` keeps the children but does not expand their own children; `1` is direct
+   * children only. Sub-agents can dispatch sub-agents, so this is a real bound,
+   * not a formality — an unbounded walk over a transcript tree is how a history
+   * call turns into a disk scan.
+   */
+  maxDepth?: number;
 }
 
 /** Per-entry text cap — tool outputs can be megabytes. */
@@ -75,8 +150,15 @@ export function selectHistory(
     since === undefined
       ? entries
       : entries.filter((e) => e.timestamp !== undefined && e.timestamp >= since);
-  if (options.limit === undefined || options.limit < 0) return filtered;
-  return filtered.slice(Math.max(0, filtered.length - options.limit));
+  const sliced =
+    options.limit === undefined || options.limit < 0
+      ? filtered
+      : filtered.slice(Math.max(0, filtered.length - options.limit));
+  // `since`/`limit` select top-level TURNS. Sub-agent content is deliberately
+  // not filtered or counted: it belongs to the turn that dispatched it, so
+  // half-filtering it would leave a tool entry showing a child transcript with
+  // holes in it and no marker saying so.
+  return sliced;
 }
 
 /**
@@ -117,12 +199,25 @@ export function redactSecrets(text: string): string {
  * consumer can grep its own handling. Pure, testable.
  */
 export function redactTranscriptEntries(
-  entries: TranscriptEntry[],
+  entries: readonly TranscriptEntry[],
   includeRawInputs = false,
 ): TranscriptEntry[] {
   return entries.map((e) => ({
     ...e,
     text: includeRawInputs ? e.text : redactSecrets(e.text),
     redacted: !includeRawInputs,
+    // Recurse. A flat map would leave every sub-agent transcript — often far
+    // more text than the parent turn, and often raw tool output — completely
+    // unredacted while the parent entry carries `redacted: true`. That is the
+    // worst possible shape for this helper: a caller checking the marker would
+    // conclude the whole tree had been through redaction.
+    ...(e.subAgents !== undefined
+      ? {
+          subAgents: e.subAgents.map((sub) => ({
+            ...sub,
+            entries: redactTranscriptEntries(sub.entries, includeRawInputs),
+          })),
+        }
+      : {}),
   }));
 }

@@ -448,6 +448,33 @@ pnpm test tests/integration # 证明新 CLI 还能跑通一轮
 - **真坏了** → 加 `minimum` 地板，并在 `src/definition/compat.ts` 的 `VERSION_FLOORS` 里登记，`evidence` 指向复现的测试。没有证据的地板会被 `tests/compat.test.ts` 打回。
 - **想用新 flag**（比如 `--agent`）→ 先在 `--help` 里验证，再藏进 `buildArgs()`，并加入 `ADVISORY_PROBE_FLAGS`（`src/discovery/capabilities.ts`）。
 
+### 探测是三态的，而这一点是承重的
+
+`--help` 探测的答案有 `true`、`false`，**以及 `"unknown"`** —— 第三种绝不能塌缩成
+`false`：
+
+```ts
+import { probeHelpFlagsDetailed } from "@stratosphereslab/agent-runtimes";
+
+const probe = await probeHelpFlagsDetailed(cmd, ["--add-dir"], ["-p", "--help"]);
+if (probe.status !== "ok") return; // 探测根本没跑完 —— 说出来
+if (probe.flags["--add-dir"] === true) /* … */ ;
+```
+
+`probeHelpFlagsDetailed` 会给出 `status: "ok" | "timeout" | "error"`，且非
+`"ok"` 时每个 flag 都是 `"unknown"` 而不是 `false`。这为什么是承重的而不只是
+吹毛求疵：
+
+- 超时会把 help 文本从 flag 中间截断（`--permission-m`），对 CLI 明明支持的
+  flag 来说这就读成了"不存在"。
+- `runCommand` 单次探测给 10s，所以机器一忙就必然命中 —— 这个 flake 不是假想。
+- 假的"这个 CLI 没有 X"在下游无法纠正，因为它和真相长得一模一样。
+
+`probeHelpFlags`（只返回布尔）与 `capabilitiesFromHelp` 为兼容已发布的签名而
+保留；`capabilitiesFromHelp` 现在只接受**确定的** `false` 来降级，`unknown`
+则原样保留 `base`。doctor 的 Flags 行在探测失败时给出 `flags-probe-timeout` /
+`flags-probe-failed` 警告，而不是把整行悄悄丢掉。
+
 没坏 + 不用新 flag = 零 diff。这就是契约（`src/definition/version.ts`）。
 
 ---

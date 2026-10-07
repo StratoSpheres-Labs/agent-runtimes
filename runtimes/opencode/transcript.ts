@@ -7,10 +7,12 @@ import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import {
   redactTranscriptEntries,
+  resolveMaxDepth,
   selectHistory,
   toMs,
   truncateTranscriptText,
   type HistoryOptions,
+  type SubAgentTurn,
   type TranscriptEntry,
 } from "../../src/definition/transcript.js";
 
@@ -39,8 +41,15 @@ export async function readOpencodeTranscript(
   const db = openOpencodeDb(opencodeDbPath(options));
   if (!db) return [];
   try {
+    // Sub-agents are opt-in (see HistoryOptions.includeSubAgents): they
+    // multiply the returned text and carry the same pasted-secret exposure as
+    // the parent. Off means no `session.parent_id` query runs at all.
+    const scope =
+      options.includeSubAgents === true
+        ? planSubAgents(db, options.sessionId, resolveMaxDepth(options.maxDepth))
+        : undefined;
     return redactTranscriptEntries(
-      selectHistory(readSession(db, options.sessionId), options),
+      selectHistory(readSession(db, options.sessionId, scope), options),
       options.includeRawInputs,
     );
   } finally {
@@ -79,7 +88,11 @@ function openOpencodeDb(path: string): DatabaseSync | null {
   }
 }
 
-function readSession(db: DatabaseSync, sessionId: string): TranscriptEntry[] {
+function readSession(
+  db: DatabaseSync,
+  sessionId: string,
+  subAgents?: SubAgentScope,
+): TranscriptEntry[] {
   let messages: Array<{ id: string; role: string; time: unknown }>;
   try {
     messages = (
@@ -103,15 +116,147 @@ function readSession(db: DatabaseSync, sessionId: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   for (const message of messages) {
     if (message.role !== "user" && message.role !== "assistant") continue;
-    foldMessage(db, message, entries);
+    foldMessage(db, message, entries, subAgents);
   }
   return entries;
+}
+
+/** A dispatched sub-agent session row. */
+interface ChildSession {
+  readonly id: string;
+  readonly agent?: string;
+  readonly title?: string;
+  readonly time?: number;
+}
+
+/**
+ * Which `task` tool calls dispatched which children, for one session.
+ *
+ * Built before folding so a tool entry can carry its children as it is
+ * emitted. Empty maps mean "looked, found none" — the caller still attaches no
+ * `subAgents` key at all, which is the documented "absent, not empty" shape.
+ */
+interface SubAgentScope {
+  /** Tool part `callID` → child sessions it dispatched, in creation order. */
+  readonly dispatchedBy: ReadonlyMap<string, readonly ChildSession[]>;
+  /** Nesting levels still available below this session's children. */
+  readonly remainingDepth: number;
+  readonly db: DatabaseSync;
+}
+
+/**
+ * Find the children of `sessionId` and tie each to the tool call that spawned it.
+ *
+ * The correlation is the load-bearing part. opencode records the child session
+ * id inside the `task` tool part's own output (`<task id="ses_…" …>`), which is
+ * the only link between the two — `session.parent_id` gives the parent→child
+ * direction but nothing that says *which call* dispatched it.
+ *
+ * A child with no matching `task` part is **dropped**, not attached to a
+ * plausible-looking call. Measured on a real store: 65 of 76 children tie
+ * cleanly and 11 do not (the parent's task part is absent — compacted or
+ * rotated). Guessing those onto a neighbouring `task` call would put a real
+ * transcript under the wrong prompt, and nothing downstream could detect it.
+ */
+function planSubAgents(db: DatabaseSync, sessionId: string, remainingDepth: number): SubAgentScope {
+  const empty: SubAgentScope = { dispatchedBy: new Map(), remainingDepth, db };
+  if (remainingDepth < 0) return empty;
+
+  let children: ChildSession[];
+  try {
+    children = (
+      db
+        .prepare(
+          "SELECT id, agent, title, time_created FROM session WHERE parent_id = ? ORDER BY time_created",
+        )
+        .all(sessionId) as Array<{
+        id: string;
+        agent?: string | null;
+        title?: string | null;
+        time_created?: unknown;
+      }>
+    ).map((row) => ({
+      id: row.id,
+      ...(typeof row.agent === "string" && row.agent.length > 0 ? { agent: row.agent } : {}),
+      ...(typeof row.title === "string" && row.title.length > 0 ? { title: row.title } : {}),
+      ...(() => {
+        const t = toMs(row.time_created);
+        return t === undefined ? {} : { time: t };
+      })(),
+    }));
+  } catch {
+    return empty; // No `session` table, or schema drift.
+  }
+  if (children.length === 0) return empty;
+
+  // One pass over the session's `task` parts, matched by substring against the
+  // child ids. Substring matching on an opaque `ses_…` id is safe here: the ids
+  // are same-length tokens from the same generator, so one cannot be a prefix of
+  // another in practice, and a miss costs a dropped child rather than a wrong
+  // parent.
+  let taskParts: Array<{ callId: string; raw: string }>;
+  try {
+    taskParts = (
+      db.prepare("SELECT data FROM part WHERE session_id = ?").all(sessionId) as Array<{
+        data: string;
+      }>
+    )
+      .map((row) => {
+        try {
+          const parsed = JSON.parse(row.data) as Record<string, unknown>;
+          if (parsed["type"] !== "tool" || parsed["tool"] !== "task") return undefined;
+          const callId = parsed["callID"];
+          return typeof callId === "string" ? { callId, raw: row.data } : undefined;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((p): p is { callId: string; raw: string } => p !== undefined);
+  } catch {
+    return empty;
+  }
+  if (taskParts.length === 0) return empty;
+
+  const dispatchedBy = new Map<string, ChildSession[]>();
+  for (const child of children) {
+    for (const part of taskParts) {
+      if (!part.raw.includes(child.id)) continue;
+      const bucket = dispatchedBy.get(part.callId);
+      if (bucket === undefined) dispatchedBy.set(part.callId, [child]);
+      else bucket.push(child);
+      break; // One owning call per child, even if the id appears twice.
+    }
+  }
+  return { dispatchedBy, remainingDepth, db };
+}
+
+/** Materialize the child transcripts a `task` tool call dispatched. */
+function attachSubAgents(scope: SubAgentScope, callId: string): SubAgentTurn[] | undefined {
+  const children = scope.dispatchedBy.get(callId);
+  if (children === undefined || children.length === 0) return undefined;
+  const turns: SubAgentTurn[] = [];
+  for (const child of children) {
+    const nested =
+      scope.remainingDepth > 0
+        ? planSubAgents(scope.db, child.id, scope.remainingDepth - 1)
+        : { dispatchedBy: new Map(), remainingDepth: 0, db: scope.db };
+    turns.push({
+      id: child.id,
+      ...(child.agent !== undefined ? { name: child.agent } : {}),
+      ...(child.title !== undefined ? { title: child.title } : {}),
+      entries: readSession(scope.db, child.id, nested),
+      ...(child.time !== undefined ? { timestamp: child.time } : {}),
+      depth: 0,
+    });
+  }
+  return turns;
 }
 
 function foldMessage(
   db: DatabaseSync,
   message: { id: string; role: string; time: unknown },
   entries: TranscriptEntry[],
+  subAgents?: SubAgentScope,
 ): void {
   let parts: Array<Record<string, unknown>>;
   try {
@@ -136,7 +281,15 @@ function foldMessage(
       texts.push(part["text"]);
     } else if (part["type"] === "tool") {
       const tool = foldToolPart(part, timestamp);
-      if (tool) entries.push(tool);
+      if (!tool) continue;
+      // Nest under the `task` call that dispatched the child, and only there.
+      const callId = part["callID"];
+      const nested =
+        subAgents !== undefined && typeof callId === "string"
+          ? attachSubAgents(subAgents, callId)
+          : undefined;
+      if (nested !== undefined) entries.push({ ...tool, subAgents: nested });
+      else entries.push(tool);
     }
     // reasoning / step-start / step-finish / snapshot / patch / file: skipped.
   }

@@ -148,7 +148,7 @@ export type {
 export { asJsonValue, EventStream, MAX_STREAM_QUEUE_LENGTH } from "./events/index.js";
 
 // Frontend wire contract (JSON-only boundary: DTOs + NDJSON framing)
-export type { WireCreateSessionOptions, WireSendInput } from "./wire.js";
+export type { WireCreateSessionOptions, WireRespondPermission, WireSendInput } from "./wire.js";
 export { decodeRuntimeEventLine, encodeRuntimeEvent, isRuntimeEvent } from "./wire.js";
 
 // Transport / Parser
@@ -177,9 +177,11 @@ export type { ResolvedLaunch } from "./discovery/launch.js";
 export { probeVersion } from "./discovery/version.js";
 export {
   probeHelpFlags,
+  probeHelpFlagsDetailed,
   capabilitiesFromHelp,
   ADVISORY_PROBE_FLAGS,
 } from "./discovery/capabilities.js";
+export type { HelpFlagVerdict, HelpFlagProbe } from "./discovery/capabilities.js";
 export type { VersionFloor } from "./definition/compat.js";
 export {
   VERSION_FLOORS,

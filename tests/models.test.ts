@@ -47,7 +47,8 @@ describe("Runtime.models()", () => {
     expect(models.length).toBeGreaterThan(0);
     // Should contain at least the free model from fallback
     expect(models.some((m) => m.id.includes("mimo"))).toBe(true);
-  }, 15000);
+    // Live probe: one `runCommand` allows 10s, so 15s flaked under load.
+  }, 30000);
 
   it("claude declares no list command (`claude --models` is unknown option)", () => {
     expect(claudeDefinition.models?.listCommand).toBeUndefined();

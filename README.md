@@ -113,6 +113,33 @@ await session.close();
 
 Rules: every runtime declares what it supports via `runtime.capabilities()` (`agentSelection`, `toolAllowlist`, `systemPrompt`, …) — unsupported inputs are rejected loudly at `createSession`, never silently ignored. Resuming history without a native id isn't possible; fold prior turns with `foldSeedMessages()` and prepend them instead. Frontend wire contract (`WireSendInput`, NDJSON framing): `docs/frontend.md`.
 
+## Chat UI (assistant-ui)
+
+If your frontend is built on [assistant-ui](https://www.assistant-ui.com), the event→message mapping ships with the package — no fold to rewrite per project:
+
+```ts
+import {
+  createThreadStore,
+  createExternalStoreAdapter,
+  createRuntimeTransport,
+} from "@stratosphereslab/agent-runtimes/assistant-ui";
+```
+
+```tsx
+const store = createThreadStore({
+  transport: createRuntimeTransport({
+    endpoints: {
+      turn: "/api/agent/turn",
+      cancel: "/api/agent/cancel",
+      permission: "/api/agent/permission",
+    },
+  }),
+});
+const runtime = useExternalStoreRuntime(createExternalStoreAdapter(store));
+```
+
+Streaming text, thinking, tool calls, the interactive Allow/Deny approval gate, cancel, usage/cost and a `data-*` channel for structured cards all come out of the same `RuntimeEvent` stream. Import it from the `/assistant-ui` subpath — the package root is Node-only. See `docs/frontend-assistant-ui.md`.
+
 ## CLI
 
 Check a runtime's health — exit `0` when it can run, `1` on blocking
@@ -189,6 +216,7 @@ Order matters: `build → lint → typecheck → test` (all four must pass befor
 - `docs/development.md` / `docs/development.zh-CN.md` — setup, test tiers, adding a runtime, troubleshooting.
 - `docs/architecture.md` — the `Runtime ≠ Session ≠ Run ≠ Transport ≠ Parser` model and the seven hard rules.
 - `docs/frontend.md` — wire contract for UI consumers: NDJSON framing, `runId` attribution, `reasoning_delta`, cancel semantics.
+- `docs/frontend-assistant-ui.md` — the shipped [assistant-ui](https://www.assistant-ui.com) adapter: `RuntimeEvent` → chat parts, approval gate, `data-*` cards.
 - `docs/runtime-authoring.md` — how to add `runtimes/<id>/` as an architecture pressure test.
 - `AGENTS.md` — repo conventions, layout, testing expectations.
 
@@ -200,6 +228,7 @@ src/definition/   # identity, executable, input, transport, session, capability,
 src/events/       # RuntimeEvent, EventStream
 src/transport/    # RuntimeTransport + StdioTransport + AcpTransport
 src/parser/       # RuntimeParser + JSONL impl (partial-chunk safe)
+src/frontend/     # browser-safe chat-UI adapters (assistant-ui) — own package subpath, zero node deps
 src/discovery/    # executable / version / models / mcp / auth probing
 src/doctor.ts     # doctor report + summarizeModels
 src/cli.ts        # agent-runtimes [-d|--doctor] <id> (doctor <id> also valid)

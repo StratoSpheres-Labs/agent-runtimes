@@ -25,6 +25,17 @@ export interface RuntimeCapabilities {
   midRunInput: boolean;
   /** Seed a fresh session with prior messages (`seedMessages`) */
   historySeed: boolean;
+  /**
+   * `history()` can nest sub-agent transcripts under the tool call that
+   * dispatched them (`HistoryOptions.includeSubAgents`).
+   *
+   * False means the CLI's own transcript store cannot be walked back to the
+   * runs a session dispatched — not merely "not implemented yet". Do not set it
+   * on the strength of the CLI's *prompts* mentioning sub-agents: the test is
+   * whether real recorded child runs can be read back and tied to their
+   * spawning tool call.
+   */
+  subAgents: boolean;
   /** Caller-supplied system prompt */
   systemPrompt: boolean;
   /** Caller-supplied output token budget (`maxTokens`) */

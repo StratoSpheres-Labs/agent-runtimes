@@ -35,6 +35,35 @@ export interface WireSendInput {
   text: string;
 }
 
+/**
+ * Answer to a pending `permission_request` event (frontend → agent backend).
+ *
+ * The interactive flow is backend-side: the backend holds
+ * `onPermissionRequest` (parking the agent on a promise it later resolves),
+ * forwards `permission_request` downstream for display, and routes this back
+ * to `run.respondToPermission(id, optionId)`. `optionId` is one of the
+ * `options[].optionId` the event offered — never a client-invented id.
+ *
+ * **Where `id` comes from, and its one hard limit.** `id` MUST be the
+ * `permission_request.id` the UI was shown, and the backend MUST be able to
+ * resolve it — that only works when `PermissionRequest.id` is present, which
+ * today means claude (`AskUserQuestion` → the tool_use_id). ACP's
+ * `session/request_permission` carries no request id and `AcpRun` does not
+ * implement `respondToPermission`, so an ACP approval has to be answered
+ * inside the handler: there is no UI round trip to carry an id. A backend that
+ * cannot correlate must reject the answer loudly rather than invent a key —
+ * an invented key never matches the id the UI holds.
+ *
+ * `permission_denied` needs no answer: the gate was already decided, and it
+ * is observe-only.
+ */
+export interface WireRespondPermission {
+  /** The `permission_request.id` being answered. */
+  id: string;
+  /** The chosen `options[].optionId`. */
+  optionId: string;
+}
+
 const EVENT_TYPES = new Set([
   "session_started",
   "text_delta",

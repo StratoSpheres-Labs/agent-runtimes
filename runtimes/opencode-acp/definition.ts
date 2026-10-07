@@ -40,6 +40,9 @@ export const opencodeAcpDefinition: RuntimeDefinition = {
     // Follow-up turns ride `session/prompt` on the live session (AcpRun.send).
     midRunInput: true,
     historySeed: false,
+    // Same store and same reader as `opencode` (`readOpencodeTranscript`), so
+    // the parent→child session linkage is available here too.
+    subAgents: true,
     systemPrompt: false,
     maxTokens: false,
     costBudget: false,

@@ -60,14 +60,39 @@ line via `encodeRuntimeEvent`, parsed with `decodeRuntimeEventLine`.
 
 Same events, different framing (`frontend.md` §Framing):
 
-| Transport    | Mapping                                  |
-| ------------ | ---------------------------------------- |
-| WebSocket    | one text message per NDJSON line         |
-| Electron IPC | `structuredClone` of the parsed event    |
-| Steering up  | `WireSendInput { runId, text }` upstream |
+| Transport    | Mapping                                           |
+| ------------ | ------------------------------------------------- |
+| WebSocket    | one text message per NDJSON line                  |
+| Electron IPC | `structuredClone` of the parsed event             |
+| Steering up  | `WireSendInput { runId, text }` upstream          |
+| Approving    | `WireRespondPermission { id, optionId }` upstream |
 
 `run.send()` needs `allowMidRunInput` on a `midRunInput` runtime (ACP
 only) — stdio CLIs reject it; text-only, images stay backend-side.
+
+`optionId` must be one the `permission_request` event offered — never
+client-invented.
+
+## Using this from a real chat UI
+
+The four routes above plus the event stream are the whole contract.
+`examples/bff-assistant-ui.ts` implements exactly that table
+(`pnpm example:bff-ui`) — pick it over `bff-sse.ts` if you use the adapter,
+because the adapter POSTs `{ prompt, session }` to `/turn` while `bff-sse.ts`
+serves `GET /events?prompt=…` over `EventSource`. If your UI is built on
+[assistant-ui](https://www.assistant-ui.com), you do not need to write the
+event→message mapping yourself:
+
+```ts
+import {
+  createRuntimeTransport,
+  createThreadStore,
+  createExternalStoreAdapter,
+} from "@stratosphereslab/agent-runtimes/assistant-ui";
+```
+
+See [assistant-ui.md](./assistant-ui.md) for the cookbook and
+[frontend-assistant-ui.md](../../frontend-assistant-ui.md) for the contract.
 
 ## Run it
 
@@ -81,6 +106,12 @@ The demo (`examples/bff-sse.ts`, `node:http` only, zero dependencies)
 is the whole slice: demo page, SSE turn endpoint, `/send` steering,
 `/cancel`. Copy it, then delete the demo page first — your UI replaces
 that part, the rest stays.
+
+Its sibling `examples/bff-assistant-ui.ts` is the same slice for the
+[assistant-ui](../assistant-ui.md) adapter: `POST /turn` instead of
+`GET /events`, plus `/permission`, and it serves `dist/assistant-ui.js` so the
+page can import the bundle directly. `tests/bff-assistant-ui.test.ts` covers its
+routes against a stub session, so it is not another hand-run artifact.
 
 ## What not to build here
 

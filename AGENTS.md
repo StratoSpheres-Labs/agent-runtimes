@@ -6,7 +6,7 @@
 
 ## 2. Repo State — v0.1.3, Working
 
-Single `agent-runtimes` package on npm (`@stratosphereslab/agent-runtimes@0.1.3`, tag-driven publish), 4 runtimes (`opencode`, `opencode-acp`, `claude`, `codex`), `doctor` CLI, 617 tests green (Oct 2026). Beyond run/streaming: discovery (`installs`, `findAllInstalls`, update checks via `registryId`), read-only `skills`/`plugins`, native `history()` transcripts (redacted by default), `runId` attribution, `reasoning_delta`, cancel-terminal `done`, run journal (NDJSON), run queue (tap-only, drain-driven), idle reaper + `shutdownAllSessions`, stall watchdog (`STALL`). Capability inventory: `docs/PARITY.md` (shipped vs deferred — check it before promising anything).
+Single `agent-runtimes` package on npm (`@stratosphereslab/agent-runtimes@0.1.3`, tag-driven publish), 4 runtimes (`opencode`, `opencode-acp`, `claude`, `codex`), `doctor` CLI, 728 tests green (Oct 2026). Beyond run/streaming: discovery (`installs`, `findAllInstalls`, update checks via `registryId`), read-only `skills`/`plugins`, native `history()` transcripts (redacted by default), `runId` attribution, `reasoning_delta`, cancel-terminal `done`, run journal (NDJSON), run queue (tap-only, drain-driven), idle reaper + `shutdownAllSessions`, stall watchdog (`STALL`), and a shipped **assistant-ui adapter** on its own browser-safe subpath (`@stratosphereslab/agent-runtimes/assistant-ui`). Capability inventory: `docs/PARITY.md` (shipped vs deferred — check it before promising anything).
 
 ## 3. Stack & Required Commands
 
@@ -29,16 +29,19 @@ src/definition/   # identity, executable, input, transport, session, capability,
 src/events/       # RuntimeEvent, EventStream
 src/transport/    # RuntimeTransport + StdioTransport + AcpTransport
 src/parser/       # RuntimeParser + JSONL impl (partial-chunk safe)
+src/frontend/assistant-ui/ # browser-safe chat-UI adapter — own subpath export, zero node deps
 src/discovery/    # executable / version / installs / models / auth / mcp / updates / toolchain
 src/doctor.ts     # doctor report + reason codes + formatReport
 src/cli.ts        # agent-runtimes [-d|--doctor] [<id>] [--json] (doctor, help family, --version)
-src/wire.ts       # frontend wire contract (WireCreateSessionOptions, WireSendInput, NDJSON framing)
+src/wire.ts       # frontend wire contract (WireCreateSessionOptions, WireSendInput, WireRespondPermission, NDJSON framing)
 runtimes/<id>/    # definition, parser, runtime, session, transcript (+ fixtures/, compat records)
 tests/            # flat, 60+ files (unit + fixture + integration)
 examples/basic.ts  examples/bff-sse.ts  docs/
 ```
 
 Single package (no `@agent-runtimes/*` split). New agent = new `runtimes/<id>/` adapter only — if it forces core edits, the abstraction is wrong (Rule 7).
+
+`src/frontend/assistant-ui/` ships as `@stratosphereslab/agent-runtimes/assistant-ui` on its **own tsup entry** (`platform: "browser"`, `target: "es2022"`). It must never be re-exported from `src/index.ts`: the root entry pulls in `node:child_process`, and a renderer importing it would fail to bundle. `tests/assistant-ui-browser-safe.test.ts` walks the transitive runtime import graph and fails on any `node:` builtin, any bare dependency, or any reach into `src/core/` beyond `errors.ts`.
 
 ## 5. Core Architecture That Will Surprise You
 
@@ -78,11 +81,13 @@ Single package (no `@agent-runtimes/*` split). New agent = new `runtimes/<id>/` 
 - Logging: no `console.log` in runtime; inject `RuntimeLogger { debug, info, warn, error }`, default silent.
 - Version/capability detection via `command --version` + `command --help` flag probing before using a flag — old CLIs crash on unknown flags. Record results with `pnpm compat:record`; fail-open rows reappear on newer CLIs until re-recorded.
 - Transcripts are redacted by default (`redacted: true`); pass `includeRawInputs` only for trusted first-party use.
+- The browser boundary is enforced, not just documented: `src/frontend/assistant-ui/` must stay free of `node:` specifiers and bare dependencies (it borrows only `src/wire.ts` and `src/core/errors.ts`), it never adds a `RuntimeEvent`, and it never re-exports from `src/index.ts`. It ships **local structural types** mirroring assistant-ui's shapes instead of importing them, so the bundle has zero runtime deps; `tests/assistant-ui-conformance.test.ts` assigns what we emit to the real `@assistant-ui/core` types (a devDependency) so upstream drift fails `pnpm typecheck` rather than a consumer's build. It is also a **separate tsconfig project** (`tsconfig.frontend.json`, the only place `"DOM"` is allowed) so `document` cannot appear in Node code.
+- **A capability the adapter does not wire is a capability it does not have.** `onEdit`/`onReload`/`onResume` are absent from the assistant-ui adapter on purpose: every CLI resume path only extends a session, so "edit and re-ask" would leave the agent holding the old transcript while the UI looked correct. Never document a UI affordance the exported adapter does not actually provide.
 
 ## 10. Decided Conventions
 
 - Package: single `agent-runtimes`, ESM-only, Node ≥ 20.
-- Docs: README/docs English-primary with `*.zh-CN.md` mirrors; code comments English. `docs/dev/` holds the getting-started track (`READDEVDOC.md`, `overview/101/install/quickstart/bff/modes`, `llms.txt` for AI consumers); deep dives live in `docs/` (`architecture`, `development`, `frontend` wire contract, `runtime-authoring`, `cross-platform`, `PARITY`).
+- Docs: README/docs English-primary with `*.zh-CN.md` mirrors; code comments English. `docs/dev/` holds the getting-started track (`READDEVDOC.md`, `overview/101/install/quickstart/bff/assistant-ui/modes`, `llms.txt` for AI consumers); deep dives live in `docs/` (`architecture`, `development`, `frontend` wire contract, `frontend-assistant-ui`, `runtime-authoring`, `cross-platform`, `PARITY`).
 - License: `Apache-2.0` — see `LICENSE`.
 - Git: `main` NOT protected until first release; direct commits to `main` allowed before v1.0.0. Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, …). One commit per batch of work; **push only on explicit approval, tags separately** (a tag push fires npm publish). Switch to protected + `feat/*` → PR after v1.0.0.
 - Lint: `ESLint` flat config + `typescript-eslint` strict + `Prettier` strict (fail on warning before merge).

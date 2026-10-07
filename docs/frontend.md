@@ -37,9 +37,19 @@ One event per line. The backend sends `encodeRuntimeEvent(event)` (JSON +
 through `decodeRuntimeEventLine` (throws `RuntimeProtocolError` on garbage).
 Suggested mappings:
 
-- **SSE**: `data: <line>\n\n` per event.
+- **SSE**: `data: <line>` per event. Both `data: <line>\n` and the
+  spec-strict `data: <line>\n\n` decode identically — a blank line is just
+  an empty frame. Note that this is **one event per `data:` line, not one
+  event per SSE frame**: `encodeRuntimeEvent` is one-event-per-line and
+  `examples/bff-sse.ts` omits the blank-line terminator, so strict SSE
+  frame-coalescing would swallow an entire turn into one multi-line `data:`
+  field. `docs/frontend-assistant-ui.md`'s reader is built for exactly that —
+  and `examples/bff-assistant-ui.ts` writes the same one-line-per-event shape.
 - **WebSocket**: one text message per line.
 - **Electron IPC**: `structuredClone` of the parsed event, or the raw line.
+
+Comments (`: keep-alive`), the other SSE fields (`event:`, `id:`, `retry:`)
+and the `[DONE]` sentinel are ignored rather than surfaced as garbage.
 
 Validate untrusted input with `isRuntimeEvent` before casting.
 
@@ -223,9 +233,44 @@ claude carries the native class (e.g. `"safetyCheck"`).
 consumers can tell "cancelled" apart from "stream cut". `run.close()`
 alone is silent teardown and emits nothing.
 
+## assistant-ui: the shipped adapter
+
+Everything above describes the wire. The mapping from that wire onto a real
+chat UI is shipped, not reimplemented per project:
+
+```ts
+import {
+  createThreadStore,
+  createExternalStoreAdapter,
+} from "@stratosphereslab/agent-runtimes/assistant-ui";
+```
+
+It is a separate, browser-safe entry point (`platform: "browser"`, zero
+imports in the emitted bundle) because the package root pulls in
+`node:child_process`. `createAssistantTurn` is the pure fold behind it —
+`RuntimeEvent` → cumulative assistant-ui parts plus a message status, with
+`permission_request` mapped onto an approval gate and `reasoning_delta` onto a
+reasoning part. See [frontend-assistant-ui.md](./frontend-assistant-ui.md)
+(mapping table, transport routes, coverage and non-coverage) and the
+[cookbook](./dev/getting-started/assistant-ui.md) for copy-paste wiring.
+
+Two DTOs cross the wire for it: `WireSendInput` (steering, above) and
+`WireRespondPermission` (`{ id, optionId }`, the answer to a pending
+`permission_request`).
+
 ## Versioning
 
 `RuntimeEvent` only grows by new `type` discriminants or new optional
 fields. Consumers must ignore unknown event types (fail open, surface a
 generic row) rather than throw — the discriminant set is the compatibility
 surface.
+
+Where that lands, precisely: `decodeRuntimeEventLine` is the strict
+single-line primitive and still throws, because a backend validating its own
+output wants to know about garbage. Fail open is implemented one layer up, in
+the streaming reader — `decodeNdjsonChunk` / `decodeSseChunk` collect the bad
+line into a `DecodedChunk.error` and keep decoding, and `readEventStream`
+routes it to the transport's `onProtocolError` sink instead of throwing. Both
+sides of a poison line are therefore delivered; only that line is lost, and
+the host can see it happened. See
+[assistant-ui adapter](./frontend-assistant-ui.md#unhandledevents--content-we-could-not-project).

@@ -17,7 +17,15 @@ See `Dev_Docs:1885-1911` and `runtimes/opencode/` as reference.
 
 ## Step-by-Step
 
-1. **Definition** (`definition.ts`): fill `RuntimeDefinition` — `identity {id,name}`, `executable {command, versionArgs}`, `input {type:"stdin"|"argv"|"file"}`, `transport {type:"stdio"|"acp"}`, `capabilities {streaming, sessionResume, modelSelection, reasoning, images, workspace}`, `session {persistent}`.
+1. **Definition** (`definition.ts`): fill `RuntimeDefinition` — `identity {id,name}`, `executable {command, versionArgs}`, `input {type:"stdin"|"argv"|"file"}`, `transport {type:"stdio"|"acp"}`, `capabilities {…}`, `session {persistent}`.
+
+   > **As of 0.1.4, `capabilities` gained a required `subAgents` flag.** Every
+   > field is required by design — an absent capability is a lie, and an
+   > optional one defaults to `undefined`, which reads as false-by-accident.
+   > Set it `true` only when real recorded sub-agent runs can be read back AND
+   > tied to the tool call that dispatched them (`HistoryOptions.includeSubAgents`
+   > works). Neither claude nor codex can do that today, so both declare
+   > `false` — see `docs/PARITY.md` §4 for the evidence.
 
 2. **buildArgs()**: implement `buildArgs(options): string[]` that hides all CLI flags (`--resume`, `-s`, `--model`, `--variant`, etc.) — Rule 2. Caller-supplied values that ride argv MUST be validated: `model` goes through `sanitizeModelId()` (`src/definition/model.ts:1`) and invalid ids throw `RuntimeSessionError` — never let a flag-shaped value reach the CLI. Example (`runtimes/opencode/definition.ts:1`):
 
@@ -98,7 +106,7 @@ after a destructive turn. Interactive turns use `onPermissionRequest` +
 - [ ] Cross-platform clean (`docs/cross-platform.md`): stdin/file preferred for prompt delivery, `ExecutableDefinition.aliases` covers per-OS binary names, no hardcoded paths/env, fixtures include a `\r\n` variant
 - [ ] MCP (if applicable): servers flow via `mcpServers` only; temp files/env cleaned on close; unsupported runtimes reject loudly
 - [ ] Authentication: `auth()` via a native read-only probe (never interactive login); probe failure is `unknown`, never a false logged-out; no secrets in `detail`
-- [ ] Workspace: `workspace` flows via `CreateSessionOptions.workspace` only; flag inventory via `probeHelpFlags`/`probeFlags` (doctor Flags row); paths normalized via `normalizeWorkspaceAllowedPaths`
+- [ ] Workspace: `workspace` flows via `CreateSessionOptions.workspace` only; flag inventory via `probeHelpFlagsDetailed`/`probeFlagsDetailed` (doctor Flags row — use the three-state form so a probe timeout reports "unknown" instead of "absent"); paths normalized via `normalizeWorkspaceAllowedPaths`
 - [ ] Permissions: bypass via `permissionMode:"bypassPermissions"` (open-design) or `dangerouslySkipPermissions:true`; interactive via `onPermissionRequest` + `permission_request` event + `respondToPermission` duplex, never stall
 - [ ] Versions: `tested` lists only CLI builds you actually verified; `minimum` only on observed breakage with a `VERSION_FLOORS` entry + proving test (never hand-edit `tested` on upgrade — run `pnpm compat:record`)
 - [ ] `pnpm build && pnpm lint && pnpm typecheck && pnpm test` green

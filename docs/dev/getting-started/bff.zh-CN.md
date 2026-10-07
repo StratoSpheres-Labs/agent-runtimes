@@ -70,8 +70,35 @@ pnpm example:bff
 ```
 
 Demo（`examples/bff-sse.ts`，只用 `node:http`，零依赖）就是完整切片：
-演示页、SSE 单轮接口、`/send` steering、`/cancel`。拷走后先删演示页——
-你的 UI 替换的就是那部分，其余保留。
+演示页、SSE 单轮接口、`/send` steering、`/permission` 审批应答、`/cancel`。
+拷走后先删演示页——你的 UI 替换的就是那部分，其余保留。
+
+它的兄弟 `examples/bff-assistant-ui.ts` 是给
+[assistant-ui](../assistant-ui.zh-CN.md) 适配层用的同一片切片：把
+`GET /events` 换成 `POST /turn`，加上 `/permission`，并把
+`dist/assistant-ui.js` 一并 serve，让页面能直接 import 那个 bundle。
+它的路由由 `tests/bff-assistant-ui.test.ts` 用桩 session 覆盖，
+所以不是又一个只能手动跑的东西。
+
+## 从真实聊天 UI 用起来
+
+上面四条路由加上事件流就是全部契约。如果你用适配层，请选
+`examples/bff-assistant-ui.ts`（`pnpm example:bff-ui`）——适配层是把
+`{ prompt, session }` POST 到 `/turn`，而 `bff-sse.ts` 走的是
+`EventSource` 的 `GET /events?prompt=…`。如果你的 UI 基于
+[assistant-ui](https://www.assistant-ui.com)，
+就不必自己写事件→消息的映射：
+
+```ts
+import {
+  createRuntimeTransport,
+  createThreadStore,
+  createExternalStoreAdapter,
+} from "@stratosphereslab/agent-runtimes/assistant-ui";
+```
+
+cookbook 见 [assistant-ui.zh-CN.md](./assistant-ui.zh-CN.md)，契约见
+[frontend-assistant-ui.zh-CN.md](../../frontend-assistant-ui.zh-CN.md)。
 
 ## 这里不做什么
 
@@ -82,4 +109,5 @@ Demo（`examples/bff-sse.ts`，只用 `node:http`，零依赖）就是完整切�
 ## 下一步
 
 - [前端契约](../../frontend.md)——全部事件类型、错误码、queue、版本规则。
+- [assistant-ui cookbook](./assistant-ui.zh-CN.md)——React 聊天 UI 的接线配方。
 - [Quickstart](./quickstart.md)——这个切片包起来的 library 直连流程。

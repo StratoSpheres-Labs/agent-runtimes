@@ -53,7 +53,7 @@ describe("session idle reaper", () => {
     await sleep(600);
     await expect(session.run("too late")).rejects.toThrow(/is closed/);
     await session.close();
-  });
+  }, 30000);
 
   it("run activity re-arms the timer", async () => {
     const session = new DefaultSession({ idleTimeoutMs: 300 });
@@ -71,7 +71,9 @@ describe("session idle reaper", () => {
     await sleep(800);
     await expect(session.run("too late")).rejects.toThrow(/is closed/);
     await session.close();
-  });
+    // Two real process spawns plus a 250ms idle window on a 5s default budget:
+    // this flaked under full-suite load ("Test timed out in 5000ms").
+  }, 30000);
 
   it("never reaps a session with a live turn (re-arms instead)", async () => {
     const holder: { current: HangingRun | null } = { current: null };

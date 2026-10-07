@@ -11,7 +11,8 @@
 - 101: docs/dev/getting-started/101.md — why CLIs differ and what gets normalized.
 - Install: docs/dev/getting-started/install.md — build from source, verify with doctor.
 - Quickstart: docs/dev/getting-started/quickstart.md — first run: detect → session → run → events.
-- BFF: docs/dev/getting-started/bff.md — the thin slice above the library: SSE endpoint, drain/cancel/permission rules, runId grouping (demo: examples/bff-sse.ts).
+- BFF: docs/dev/getting-started/bff.md — the thin slice above the library: SSE endpoint, drain/cancel/permission rules, runId grouping. Demos: examples/bff-sse.ts (raw SSE via EventSource) and examples/bff-assistant-ui.ts (the assistant-ui adapter's POST /turn contract; covered by tests/bff-assistant-ui.test.ts).
+- assistant-ui: docs/dev/getting-started/assistant-ui.md — copy-paste React cookbook for the shipped adapter: provider, tool cards, Allow/Deny gate, reasoning, usage, data-* cards, error codes.
 - Modes: docs/dev/getting-started/modes.md — "plan mode" means three things: permission vs agent axes, per-runtime field mapping, gaps.
 
 ## Architecture (docs/)
@@ -19,6 +20,7 @@
 - docs/architecture.md — the model (Runtime≠Session≠Run≠Transport≠Parser), the 10 RuntimeEvent types, the seven hard rules.
 - docs/development.md — setup, four gates (build/lint/typecheck/test), test tiers, adding a runtime, release.
 - docs/frontend.md — wire contract for BFFs: event shapes, error-code taxonomy (switch on code, never message), drain-before-next-run rule, cancellation semantics.
+- docs/frontend-assistant-ui.md — the shipped chat-UI adapter (@stratosphereslab/agent-runtimes/assistant-ui): RuntimeEvent → assistant-ui parts, SSE/NDJSON transport, approval gate, coverage and non-coverage.
 - docs/runtime-authoring.md — new adapters: 5-file layout, input-surface channel map, checklist.
 - docs/cross-platform.md — Windows/POSIX shims, signals, paths, stdin/stdout rules.
 

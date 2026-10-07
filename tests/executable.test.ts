@@ -7,6 +7,8 @@ import {
   findExecutable,
   forgetUnusableExecutables,
   isExecutableFile,
+  isInvocable,
+  probeInvocableVerdict,
   resolveExtraProbePaths,
 } from "../src/discovery/executable.js";
 import { codexDefinition } from "../runtimes/codex/definition.js";
@@ -56,6 +58,56 @@ describe("unusable-executable memory", () => {
     } finally {
       vi.unstubAllEnvs();
       forgetUnusableExecutables("ghostcli");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("probeInvocableVerdict", () => {
+  it("reports a timed-out probe as unknown, never as broken", async () => {
+    // The bug this pins: a timeout used to collapse into `false`, and
+    // `pickBestExecutable` recorded that as PROOF the shim was broken. On a
+    // loaded machine (parallel workers, antivirus scanning a fresh binary) a
+    // perfectly good CLI was then hidden from every later pass for the whole
+    // 60s TTL — `detect()` / `doctor` reporting a working agent as missing.
+    if (process.platform === "win32") return; // no sh-script semantics here
+    const dir = mkdtempSync(join(tmpdir(), "agent-runtimes-slow-"));
+    try {
+      const slow = join(dir, "slowcli");
+      writeFileSync(slow, "#!/bin/sh\nsleep 30\n");
+      chmodSync(slow, 0o755);
+      expect(await probeInvocableVerdict(slow, { timeoutMs: 250 })).toBe("unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still reports a missing target as broken (the fix must not weaken detection)", async () => {
+    if (process.platform === "win32") return;
+    const dir = mkdtempSync(join(tmpdir(), "agent-runtimes-ghost-"));
+    try {
+      const ghost = join(dir, "not-on-disk");
+      // Spawn error (ENOENT) is real evidence, unlike a slow probe.
+      expect(await probeInvocableVerdict(ghost, { timeoutMs: 5_000 })).toBe("no");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a working command as invocable", async () => {
+    // `node` is on PATH by definition of running this suite.
+    const verdict = await probeInvocableVerdict(process.execPath, { timeoutMs: 10_000 });
+    expect(verdict).toBe("yes");
+  });
+
+  it("keeps isInvocable's boolean contract for findAllInstalls", async () => {
+    if (process.platform === "win32") return;
+    const dir = mkdtempSync(join(tmpdir(), "agent-runtimes-bool-"));
+    try {
+      const ghost = join(dir, "not-on-disk");
+      expect(await isInvocable(ghost)).toBe(false);
+      expect(await isInvocable(process.execPath)).toBe(true);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

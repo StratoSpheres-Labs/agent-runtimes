@@ -7,6 +7,7 @@ import type { McpServer, McpServerInfo } from "../definition/mcp.js";
 import type { RuntimeSkill } from "../definition/skill.js";
 import type { RuntimePlugin } from "../definition/plugin.js";
 import { findAllInstalls, type InstalledCopy } from "../discovery/installs.js";
+import type { HelpFlagProbe } from "../discovery/capabilities.js";
 import type { AuthStatus } from "../definition/auth.js";
 import type { WorkspaceOptions } from "../definition/workspace.js";
 import type { PermissionHandler } from "../definition/permission.js";
@@ -15,7 +16,7 @@ import type { SeedMessage } from "../definition/session-inputs.js";
 import { findExecutable } from "../discovery/executable.js";
 import { probeVersion } from "../discovery/version.js";
 import { resolveLaunch } from "../discovery/launch.js";
-import { probeHelpFlags } from "../discovery/capabilities.js";
+import { probeHelpFlags, probeHelpFlagsDetailed } from "../discovery/capabilities.js";
 import { discoverModels, rememberLiveModels } from "../discovery/models.js";
 import { DefaultSession, type AgentSession } from "./session.js";
 
@@ -166,8 +167,20 @@ export interface AgentRuntime {
    * failures yield `{}` so callers render no row instead of an error.
    * `executable` overrides the bare definition command (doctor passes the
    * detected absolute path — bare names can miss PATH-less installs).
+   *
+   * Note the lossy part: an unprobed flag reads `false` here, which a caller
+   * cannot tell from a flag the CLI genuinely lacks. Prefer
+   * {@link probeFlagsDetailed} when that difference reaches a human or gates
+   * anything.
    */
   probeFlags?(flags: readonly string[], executable?: string): Promise<Record<string, boolean>>;
+
+  /**
+   * Same probe, three states per flag plus the probe's own outcome, so
+   * "this CLI has no such flag" stays distinguishable from "we never found
+   * out". Never throws — a failed probe reports `status: "timeout" | "error"`.
+   */
+  probeFlagsDetailed?(flags: readonly string[], executable?: string): Promise<HelpFlagProbe>;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,8 +213,8 @@ export class DefaultRuntime implements AgentRuntime {
 
   // NOTE: a `capabilitiesProbed()` refinement used to live here (definition
   // capabilities overlaid with `--help` hits). Removed: zero callers, and
-  // the doctor Flags row (`probeFlags()` + `ADVISORY_PROBE_FLAGS`) covers
-  // the advisory need with raw hits instead of a merged guess. The
+  // the doctor Flags row (`probeFlagsDetailed()` + `ADVISORY_PROBE_FLAGS`)
+  // covers the advisory need with raw hits instead of a merged guess. The
   // `probeHelpFlags` / `capabilitiesFromHelp` primitives stay exported
   // and tested for anyone who needs them.
 
@@ -215,6 +228,25 @@ export class DefaultRuntime implements AgentRuntime {
       return await probeHelpFlags(cmd, flags, helpArgs);
     } catch {
       return {};
+    }
+  }
+
+  public async probeFlagsDetailed(
+    flags: readonly string[],
+    executable?: string,
+  ): Promise<HelpFlagProbe> {
+    const cmd = executable ?? this.definition.executable.command;
+    const helpArgs = this.definition.executable.helpArgs ?? ["--help"];
+    try {
+      return await probeHelpFlagsDetailed(cmd, flags, helpArgs);
+    } catch {
+      // `probeHelpFlagsDetailed` does not throw by contract; this is the
+      // belt-and-braces path (e.g. `resolveLaunch` on a broken shim). Still
+      // must never leak an all-false map — report every flag as unprobed.
+      return {
+        flags: Object.fromEntries(flags.map((flag) => [flag, "unknown"] as const)),
+        status: "error",
+      };
     }
   }
 

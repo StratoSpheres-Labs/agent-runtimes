@@ -6,14 +6,14 @@
 
 ## 目录
 
-| 分区 | 页面                                                                                                                                                                                                                                                                    |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 入门 | [概览](./getting-started/overview.zh-CN.md) · [101](./getting-started/101.zh-CN.md) · [安装](./getting-started/install.zh-CN.md) · [快速上手](./getting-started/quickstart.zh-CN.md) · [BFF](./getting-started/bff.zh-CN.md) · [模式](./getting-started/modes.zh-CN.md) |
-| 架构 | [architecture.md](../architecture.md)（模型 + 七条硬规则）· [development.zh-CN.md](../development.zh-CN.md)（环境、测试分层、发版）                                                                                                                                     |
-| 约定 | [frontend.md](../frontend.md)（传输约定 + 错误码）· [runtime-authoring.md](../runtime-authoring.md)（新 adapter）· [cross-platform.md](../cross-platform.md)                                                                                                            |
+| 分区 | 页面                                                                                                                                                                                                                                                                                                                              |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 入门 | [概览](./getting-started/overview.zh-CN.md) · [101](./getting-started/101.zh-CN.md) · [安装](./getting-started/install.zh-CN.md) · [快速上手](./getting-started/quickstart.zh-CN.md) · [BFF](./getting-started/bff.zh-CN.md) · [assistant-ui](./getting-started/assistant-ui.zh-CN.md) · [模式](./getting-started/modes.zh-CN.md) |
+| 架构 | [architecture.md](../architecture.md)（模型 + 七条硬规则）· [development.zh-CN.md](../development.zh-CN.md)（环境、测试分层、发版）                                                                                                                                                                                               |
+| 约定 | [frontend.md](../frontend.md)（传输约定 + 错误码）· [frontend-assistant-ui.zh-CN.md](../frontend-assistant-ui.zh-CN.md)（聊天 UI 适配层）· [runtime-authoring.md](../runtime-authoring.md)（新 adapter）· [cross-platform.md](../cross-platform.md)                                                                               |
 
 ## 地图
 
-- `getting-started/` —— 安装、首跑（`docs/dev/` 下仅有的页面）。
-- 上层 `docs/` —— 深水区：架构、开发、前端传输约定、写新 adapter、跨平台。
+- `getting-started/` —— 安装、首跑、BFF 切片、assistant-ui cookbook（`docs/dev/` 下仅有的页面）。
+- 上层 `docs/` —— 深水区：架构、开发、前端传输约定、聊天 UI 适配层、写新 adapter、跨平台。
 - `llms.txt` —— 机器可读的页面索引（给 AI 消费者）。

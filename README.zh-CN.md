@@ -113,6 +113,36 @@ await session.close();
 
 规则：每个 runtime 通过 `runtime.capabilities()` 声明自己支持什么（`agentSelection`、`toolAllowlist`、`systemPrompt`……）——不支持的输入在 `createSession` 直接报错，绝不悄悄吞掉。没有原生会话 id 就续不上历史；用 `foldSeedMessages()` 把旧轮次折成文本拼在前面。前端透传契约（`WireSendInput`、NDJSON 分帧）：`docs/frontend.md`。
 
+## 聊天 UI（assistant-ui）
+
+如果你的前端基于 [assistant-ui](https://www.assistant-ui.com)，事件→消息的映射随包一起发布，不用每个项目重写一遍 fold：
+
+```ts
+import {
+  createThreadStore,
+  createExternalStoreAdapter,
+  createRuntimeTransport,
+} from "@stratosphereslab/agent-runtimes/assistant-ui";
+```
+
+```tsx
+const store = createThreadStore({
+  transport: createRuntimeTransport({
+    endpoints: {
+      turn: "/api/agent/turn",
+      cancel: "/api/agent/cancel",
+      permission: "/api/agent/permission",
+    },
+  }),
+});
+const runtime = useExternalStoreRuntime(createExternalStoreAdapter(store));
+```
+
+流式文本、思考过程、工具调用、可交互的 Allow/Deny 审批门、取消、用量/花费，
+以及一条承载结构化卡片的 `data-*` 通道——全部来自同一条 `RuntimeEvent` 流。
+务必从 `/assistant-ui` 子路径导入——包根是 Node 专用的。见
+`docs/frontend-assistant-ui.zh-CN.md`。
+
 ## CLI
 
 检查某个 runtime 的健康状况——能跑则退出码 `0`，阻塞性失败 `1`，用法错误 `2`：
@@ -187,6 +217,7 @@ pnpm test       # vitest run
 - `docs/development.md` / `docs/development.zh-CN.md` —— 环境、测试分层、新增 runtime、排错。
 - `docs/architecture.md` —— `Runtime ≠ Session ≠ Run ≠ Transport ≠ Parser` 模型与七条硬规则。
 - `docs/frontend.md` —— 给 UI 消费方的线上传输约定：NDJSON 分帧、`runId` 归因、`reasoning_delta`、取消语义。
+- `docs/frontend-assistant-ui.zh-CN.md` —— 随包发布的 [assistant-ui](https://www.assistant-ui.com) 适配层：`RuntimeEvent` → 聊天 part、审批门、`data-*` 卡片。
 - `docs/runtime-authoring.md` —— 如何新增 `runtimes/<id>/` 作为架构压力测试。
 - `AGENTS.md` —— 仓库约定、目录结构、测试要求。
 
@@ -198,6 +229,7 @@ src/definition/   # identity、executable、input、transport、session、capabi
 src/events/       # RuntimeEvent、EventStream
 src/transport/    # RuntimeTransport + StdioTransport + AcpTransport
 src/parser/       # RuntimeParser + JSONL 实现（半包安全）
+src/frontend/     # 浏览器安全的聊天 UI 适配层（assistant-ui）——独立子路径，零 node 依赖
 src/discovery/    # executable / version / models / mcp / auth 探测
 src/doctor.ts     # doctor 报告 + summarizeModels
 src/cli.ts        # agent-runtimes [-d|--doctor] <id>（doctor <id> 同样有效）

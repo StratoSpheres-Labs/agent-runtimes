@@ -109,7 +109,10 @@ describe("findAllInstalls (hermetic)", () => {
       expect(typeof c.binary).toBe("string");
       expect(typeof c.manager).toBe("string");
     }
-  });
+    // Live scan: `findAllInstalls` probes every hit with a 10s budget each, so
+    // the 5s default could not survive a loaded box ("Test timed out in
+    // 5000ms" — never an assertion failure).
+  }, 60000);
 });
 
 describe("findAllInstalls (live, guarded)", () => {
@@ -118,5 +121,6 @@ describe("findAllInstalls (live, guarded)", () => {
     if (copies.length === 0) return;
     expect(copies.filter((c) => c.selected)).toHaveLength(1);
     expect(copies.every((c) => c.shims.length > 0)).toBe(true);
-  });
+    // Live scan; see the budget note on the hermetic case above.
+  }, 60000);
 });

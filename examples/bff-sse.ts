@@ -16,10 +16,21 @@
  *   `close()` alone would be silent teardown.
  * - `WireSendInput { runId, text }` routes to the live run's `send()`
  *   (ACP runtimes only — stdio CLIs reject loudly, surfaced as 400).
+ * - `WireRespondPermission { id, optionId }` answers a `permission_request`
+ *   the UI is showing (see `/permission`). The pending request is held
+ *   backend-side and keyed by `PermissionRequest.id`, which is the same id the
+ *   event carried — that is the only way the answer can be matched up.
  *
  * Permission answers stay backend-side (`onPermissionRequest` at
- * `createSession` / `run.respondToPermission`); this slice only
- * forwards `permission_request` events downstream for display.
+ * `createSession` / `run.respondToPermission`); this slice forwards
+ * `permission_request` events downstream for display and routes the answer
+ * back through `/permission`.
+ *
+ * Hard limit, stated plainly: a UI approval round trip only works where the
+ * transport supplies a request id — claude (`AskUserQuestion`) does. ACP's
+ * `session/request_permission` has none and `AcpRun` has no
+ * `respondToPermission`, so `respondWithUi` answers inline and logs it
+ * instead of faking a key that could never match.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -28,6 +39,9 @@ import {
   encodeRuntimeEvent,
   type AgentRun,
   type AgentSession,
+  type PermissionRequest,
+  type PermissionResponse,
+  type WireRespondPermission,
   type WireSendInput,
 } from "../src/index.js";
 
@@ -39,6 +53,44 @@ interface Entry {
   busy: boolean;
   /** runId → live run, recorded from the event stream as turns flow. */
   runs: Map<string, AgentRun>;
+}
+
+/**
+ * Pending `permission_request` ids → their resolver. The agent parks until the
+ * UI answers, so the answer has to be held somewhere the HTTP layer can reach:
+ * `onPermissionRequest` cannot see the browser.
+ *
+ * Keyed by `PermissionRequest.id`, which is the SAME id as the
+ * `permission_request` event's `id` — that is what lets `/permission` match an
+ * answer to the request it is holding. Runtimes without one (ACP) cannot be
+ * answered from the UI at all; see `respondWithUi` below.
+ */
+const pendingPermissions = new Map<string, (optionId: string) => void>();
+
+/**
+ * Only park the agent when the transport gave us an id the UI will also see.
+ *
+ * ACP's `session/request_permission` has no request id and `AcpRun` has no
+ * `respondToPermission`, so a UI round trip could never be matched up. Rather
+ * than invent a key (which would 404 on every click) we answer inline with the
+ * first allow-style option and log why — an app that wants a real approval UI
+ * there needs ACP-side support, not a workaround.
+ */
+function respondWithUi(req: PermissionRequest): Promise<PermissionResponse> {
+  if (req.id === undefined) {
+    console.warn(
+      `[bff] '${req.method}' carries no request id — answering inline; ` +
+        "a UI approval round trip is not possible for this runtime",
+    );
+    const allow = req.options.find((o) => /allow|yes|accept/i.test(`${o.kind} ${o.label ?? ""}`));
+    return Promise.resolve({ optionId: (allow ?? req.options[0])?.optionId ?? "" });
+  }
+  return new Promise((resolve) => {
+    pendingPermissions.set(req.id as string, (optionId) => {
+      pendingPermissions.delete(req.id as string);
+      resolve({ optionId });
+    });
+  });
 }
 
 const entries = new Map<string, Entry>();
@@ -118,7 +170,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const key = url.searchParams.get("session") ?? "default";
     let entry = entries.get(key);
     if (entry === undefined) {
-      const session = await runtime.createSession({ cwd: process.cwd() });
+      const session = await runtime.createSession({
+        cwd: process.cwd(),
+        // Interactive turns park the agent until the UI answers. Without a
+        // handler the agent would be auto-denied and the approval card would
+        // never get a chance to render.
+        onPermissionRequest: respondWithUi,
+      });
       entry = { session, busy: false, runs: new Map() };
       entries.set(key, entry);
     }
@@ -145,6 +203,23 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return;
     }
     await target.send(body.text);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/permission") {
+    const body = JSON.parse(await readBody(req)) as WireRespondPermission;
+    const resolve = pendingPermissions.get(body.id);
+    if (resolve === undefined) {
+      // Loud, and specific: a wrong id here almost always means the runtime
+      // never supplied one (see `respondWithUi`).
+      sendJson(res, 404, {
+        error:
+          `no pending permission '${body.id}' — already answered, expired, ` +
+          "or this runtime supplies no request id (ACP cannot round-trip a UI approval)",
+      });
+      return;
+    }
+    resolve(body.optionId);
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -184,6 +259,17 @@ document.getElementById("go").onclick = () => {
     else if (e.type === "reasoning_delta") out.textContent += "\\n[thinking]\\n";
     else if (e.type === "tool_started") out.textContent += "\\n[tool " + e.name + "]\\n";
     else if (e.type === "error") out.textContent += "\\n[error " + e.error.code + "]\\n";
+    else if (e.type === "permission_request") {
+      out.textContent += "\\n[ask " + (e.toolName ?? "?") + "] ";
+      if (confirm((e.prompt ?? "The agent asks permission") + "\\n\\n" +
+          e.options.map((o) => o.label ?? o.optionId).join(" | "))) {
+        fetch("/permission", { method: "POST", body: JSON.stringify({ id: e.id, optionId: e.options[0].optionId }) });
+      } else {
+        const deny = e.options.find((o) => /reject|deny|no/i.test(o.kind + " " + (o.label ?? "")));
+        if (deny) fetch("/permission", { method: "POST", body: JSON.stringify({ id: e.id, optionId: deny.optionId }) });
+      }
+    }
+    else if (e.type === "permission_denied") out.textContent += "\\n[blocked: " + (e.reason ?? "") + "]\\n";
     else if (e.type === "done") { out.textContent += "\\n[done]\\n"; es.close(); }
     else if (e.type === "stream_error") { out.textContent += "\\n[fail " + e.message + "]\\n"; es.close(); }
   };

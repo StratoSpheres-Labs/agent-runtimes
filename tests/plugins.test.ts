@@ -265,7 +265,8 @@ describe("ClaudeRuntime.plugins", () => {
     const plugins = await runtime.plugins();
     expect(plugins.map((p) => p.id)).toContain("codex@openai-codex");
     expect(plugins.every((p) => p.kind === "marketplace")).toBe(true);
-  }, 15000);
+    // Live scan; 15s flaked under full-suite load ("Test timed out").
+  }, 60000);
 });
 
 describe("parseCodexPluginList", () => {
@@ -408,7 +409,8 @@ describe("CodexRuntime.plugins", () => {
     if (plugins.length === 0) return;
     expect(plugins.map((p) => p.id)).toContain("documents@openai-primary-runtime");
     expect(plugins.every((p) => p.kind === "marketplace")).toBe(true);
-  }, 15000);
+    // Live scan; see the sibling ClaudeRuntime.plugins case above.
+  }, 60000);
 });
 
 describe("OpencodeRuntime.plugins", () => {

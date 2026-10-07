@@ -1,0 +1,18 @@
+{
+  // The browser half of the repo, typechecked as its own project.
+  //
+  // Why a second project instead of just adding "DOM" to the root tsconfig:
+  // `src/**` is Node code and must never reach for a DOM global. Widening the
+  // root `lib` would have let `document.x` typecheck inside `src/cli.ts`,
+  // quietly eroding the guarantee that the Node side is Node-only. Only the
+  // adapter (and `@assistant-ui/core`'s .d.ts, which references React types
+  // and `UnderlyingSourceCancelCallback`) needs those globals.
+  //
+  // `pnpm typecheck` runs both projects; CI mirrors it.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/frontend/**/*", "tests/assistant-ui-*.test.ts"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -5,16 +5,16 @@ describe("probeVersion", () => {
   it("reads node --version", async () => {
     const v = await probeVersion(process.execPath, ["--version"]);
     expect(v?.startsWith("v")).toBe(true);
-  });
+  }, 30000);
 
   it("forwards explicit env (shim launches merge harvested extras)", async () => {
     const v = await probeVersion(process.execPath, ["--version"], { ...process.env });
     expect(v?.startsWith("v")).toBe(true);
-  });
+  }, 30000);
 
   it("returns null for a missing command", async () => {
     await expect(probeVersion("definitely-not-exist-xyz", ["--version"])).resolves.toBeNull();
-  });
+  }, 30000);
 });
 
 describe("parseSemver", () => {

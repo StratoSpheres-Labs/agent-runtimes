@@ -395,6 +395,7 @@ const ALL_CAPS: RuntimeCapabilities = {
   agentSelection: true,
   midRunInput: true,
   historySeed: true,
+  subAgents: false,
   systemPrompt: true,
   maxTokens: true,
   costBudget: true,
@@ -625,14 +626,59 @@ describe("doctor() reason codes (stub runtimes, no CLI)", () => {
     // Doctor passes the detected absolute path (bare names miss PATH-less installs).
     expect(seen).toEqual([{ flags: ADVISORY_PROBE_FLAGS, exe: "/usr/bin/stub" }]);
 
-    // No probeFlags slot (or empty hits) → no Flags row, never an error.
+    // No probe implemented at all → no row. An absent feature is not a failure.
     const plain = await doctor("stub", fakeRegistry(healthyStub()));
     expect(plain.checks.find((c) => c.name === "Flags")).toBeUndefined();
-    const empty = healthyStub();
-    empty.probeFlags = () => Promise.resolve({});
+
+    // A probe that completed but matched nothing → still no row: zero hits is
+    // a real, uninteresting answer, not an error.
+    const none = healthyStub();
+    none.probeFlagsDetailed = () => Promise.resolve({ flags: {}, status: "ok" });
     expect(
-      (await doctor("stub", fakeRegistry(empty))).checks.find((c) => c.name === "Flags"),
+      (await doctor("stub", fakeRegistry(none))).checks.find((c) => c.name === "Flags"),
     ).toBeUndefined();
+  });
+
+  it("separates a failed or timed-out probe from 'advertises nothing'", async () => {
+    // The reporting bug: a 10s probe timeout used to leave `hits` empty, the
+    // row was dropped entirely, and the report gave no sign that a healthy CLI
+    // had merely gone unexamined.
+    const timedOut = healthyStub();
+    timedOut.probeFlagsDetailed = (flags) =>
+      Promise.resolve({
+        flags: Object.fromEntries(flags.map((f) => [f, "unknown"] as const)),
+        status: "timeout",
+      });
+    const t = await doctor("stub", fakeRegistry(timedOut));
+    const timeoutRow = t.checks.find((c) => c.name === "Flags");
+    expect(timeoutRow?.status).toBe("warn");
+    expect(reasonOf(t, "Flags")).toBe("flags-probe-timeout");
+    expect(timeoutRow?.detail).toContain("unknown");
+
+    const failed = healthyStub();
+    failed.probeFlagsDetailed = () => Promise.resolve({ flags: {}, status: "error" });
+    const f = await doctor("stub", fakeRegistry(failed));
+    expect(reasonOf(f, "Flags")).toBe("flags-probe-failed");
+
+    // The legacy boolean probe returning `{}` also means "failed", not "none".
+    const legacy = healthyStub();
+    legacy.probeFlags = () => Promise.resolve({});
+    expect(reasonOf(await doctor("stub", fakeRegistry(legacy)), "Flags")).toBe(
+      "flags-probe-failed",
+    );
+
+    // Never "fail": a flag inventory is advisory, so it must not change the
+    // doctor's exit code (doctorExitCode keys on `fail` only).
+    expect(t.checks.filter((c) => c.status === "fail")).toHaveLength(0);
+  });
+
+  it("prefers the detailed probe over the legacy one when both exist", async () => {
+    const both = healthyStub();
+    both.probeFlags = () => Promise.resolve({ "--add-dir": true });
+    both.probeFlagsDetailed = () => Promise.resolve({ flags: { "--sandbox": true }, status: "ok" });
+    const row = (await doctor("stub", fakeRegistry(both))).checks.find((c) => c.name === "Flags");
+    expect(row?.detail).toContain("--sandbox");
+    expect(row?.detail).not.toContain("--add-dir");
   });
 });
 

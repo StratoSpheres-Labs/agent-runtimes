@@ -20,6 +20,7 @@ const base: RuntimeCapabilities = {
   agentSelection: false,
   midRunInput: false,
   historySeed: false,
+  subAgents: false,
   systemPrompt: false,
   maxTokens: false,
   costBudget: false,

@@ -1,6 +1,6 @@
 {
   "name": "@stratosphereslab/agent-runtimes",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Universal runtime layer for local AI coding agents — unified Runtime → Session → Run → RuntimeEvent API",
   "type": "module",
   "engines": {
@@ -24,12 +24,17 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "agent-runtimes": "dist/cli.js"
+    "agent-runtimes": "dist/cli.js",
+    "agentruntimes": "dist/cli.js"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./assistant-ui": {
+      "types": "./dist/assistant-ui.d.ts",
+      "import": "./dist/assistant-ui.js"
     },
     "./package.json": "./package.json"
   },
@@ -50,16 +55,19 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepublishOnly": "pnpm build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.frontend.json",
     "example": "tsx examples/basic.ts",
     "example:bff": "tsx examples/bff-sse.ts",
+    "example:bff-ui": "tsx examples/bff-assistant-ui.ts",
     "test:e2e:round1": "tsx test/e2e-round1.ts",
     "test:e2e:round2": "tsx test/e2e-round2.ts",
     "compat:record": "tsx scripts/compat-record.ts"
   },
   "devDependencies": {
+    "@assistant-ui/core": "^0.3.22",
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.20.4",
+    "@types/react": "^19.3.0",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.9",
@@ -76,7 +84,8 @@
   },
   "pnpm": {
     "overrides": {
-      "esbuild": "0.28.2"
+      "esbuild": "0.28.2",
+      "source-map-js": "^1.2.2"
     }
   },
   "author": "",

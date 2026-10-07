@@ -14,7 +14,7 @@ function shortVersion(raw: string): string {
 import { agentSearchDirs } from "./discovery/executable.js";
 import type { InstalledCopy, InstallManager } from "./discovery/installs.js";
 import { fetchLatestVersion, updateAvailable } from "./discovery/updates.js";
-import { ADVISORY_PROBE_FLAGS } from "./discovery/capabilities.js";
+import { ADVISORY_PROBE_FLAGS, type HelpFlagProbe } from "./discovery/capabilities.js";
 
 export type DoctorStatus = "ok" | "warn" | "fail";
 
@@ -30,6 +30,8 @@ export type DoctorReason =
   | "not-on-path"
   | "shim-broken"
   | "version-probe-failed"
+  | "flags-probe-timeout"
+  | "flags-probe-failed"
   | "untested-version"
   | "auth-missing"
   | "auth-unknown"
@@ -141,6 +143,28 @@ async function safe<T>(fn: () => Promise<T>): Promise<{ value: T | null; message
   } catch (err) {
     return { value: null, message: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Re-express the legacy boolean probe as a three-state one.
+ *
+ * Only reached for a runtime that implements `probeFlags` but not
+ * `probeFlagsDetailed` (a third-party `AgentRuntime` on the published
+ * interface). An empty map means the probe failed rather than found nothing, so
+ * it becomes `status: "error"` — reporting "0 flags advertised" there would
+ * invent a finding about that CLI that nobody actually made.
+ */
+function toProbe(flags: Readonly<Record<string, boolean>> | undefined): HelpFlagProbe {
+  if (flags === undefined || Object.keys(flags).length === 0) {
+    return { flags: {}, status: "error" };
+  }
+  return {
+    // Identity, not a re-narrow: the caller already typed these as booleans,
+    // and the hit test downstream (`=== true`) is what makes a sloppy
+    // third-party implementation degrade to "no hit" rather than to "ok".
+    flags: { ...flags },
+    status: "ok",
+  };
 }
 
 /**
@@ -256,17 +280,46 @@ export async function doctor(
   // the installed CLI actually advertises, so capability staleness is
   // visible without anyone hand-editing version tables. Skipped when the
   // runtime is missing or the probe yields nothing.
-  if (status?.installed) {
-    const probed = await safe<Record<string, boolean>>(
-      async () => (await runtime.probeFlags?.(ADVISORY_PROBE_FLAGS, status.executable)) ?? {},
+  if (
+    status?.installed &&
+    // A runtime that implements neither probe has no flag inventory to report —
+    // that is an absent feature, not a failed check, so no row at all.
+    (runtime.probeFlagsDetailed !== undefined || runtime.probeFlags !== undefined)
+  ) {
+    const probed = await safe<HelpFlagProbe>(
+      async () =>
+        (await runtime.probeFlagsDetailed?.(ADVISORY_PROBE_FLAGS, status.executable)) ??
+        // Fall back to the lossy boolean probe (a third-party AgentRuntime on
+        // the published interface), re-expressed as one shape to read.
+        toProbe(await runtime.probeFlags?.(ADVISORY_PROBE_FLAGS, status.executable)),
     );
-    const hits = ADVISORY_PROBE_FLAGS.filter((f) => probed.value?.[f] === true);
-    if (hits.length > 0) {
+    // "The probe never completed" and "the CLI advertises nothing we know" are
+    // different findings. Reporting the first as the second makes a loaded
+    // machine look like an ancient CLI, and there is nothing in the report to
+    // correct that impression.
+    if (probed.value?.status === "timeout") {
       checks.push({
         name: "Flags",
-        status: "ok",
-        detail: `${String(hits.length)}/${String(ADVISORY_PROBE_FLAGS.length)} advertised: ${hits.join(", ")}`,
+        status: "warn",
+        detail: "help probe timed out — flag inventory unknown, not empty",
+        reason: "flags-probe-timeout",
       });
+    } else if (probed.value?.status === "error") {
+      checks.push({
+        name: "Flags",
+        status: "warn",
+        detail: "help probe failed to run — flag inventory unknown, not empty",
+        reason: "flags-probe-failed",
+      });
+    } else {
+      const hits = ADVISORY_PROBE_FLAGS.filter((f) => probed.value?.flags[f] === true);
+      if (hits.length > 0) {
+        checks.push({
+          name: "Flags",
+          status: "ok",
+          detail: `${String(hits.length)}/${String(ADVISORY_PROBE_FLAGS.length)} advertised: ${hits.join(", ")}`,
+        });
+      }
     }
   }
 
