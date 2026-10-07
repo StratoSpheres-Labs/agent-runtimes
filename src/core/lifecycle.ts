@@ -112,6 +112,20 @@ export class RuntimeProcess {
       this.exitResolve = resolve;
       this.exitReject = reject;
     });
+    // Nobody is obliged to call `wait()`. Without this guard, a spawn failure
+    // that arrives while the caller is only tearing down (`cancel()`/`close()`
+    // never touch `exitPromise`) rejects a promise with no observer, and Node
+    // reports that as an `unhandledRejection` — which crashes the process.
+    //
+    // That is exactly how a missing CLI failed an entire CI run with all 800
+    // tests green: every assertion passed and the exit code was still 1.
+    //
+    // `wait()` still hands out this same promise, so a real caller awaiting it
+    // still sees the rejection. This only silences the case where there is no
+    // caller at all.
+    this.exitPromise.catch(() => {
+      // Intentionally empty — see above.
+    });
     this.closePromise = new Promise<ProcessExit>((resolve) => {
       this.closeResolve = resolve;
     });
